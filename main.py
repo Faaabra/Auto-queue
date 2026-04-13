@@ -13,12 +13,9 @@ import urllib.request
 import urllib.error
 import tempfile
 
-CURRENT_VERSION = "2.0.0"
+CURRENT_VERSION = "2.0.3"
 # --- INFO DE ACTUALIZACIONES ---
-# EJEMPLO: Sube a Pastebin o GitHub un archivo que contenga exactamente esto:
-# {"version": "2.0.1", "download_url": "https://link-a-tu-nuevo-exe/RustAutoQueue.exe"}
-# Pon aquí el enlace RAW (texto plano) hacia ese archivo JSON (EJ: https://pastebin.com/raw/XXXXXXXX o raw.githubusercontent.com...).
-UPDATE_INFO_URL = "https://pastebin.com/raw/wzs48MCD"
+GITHUB_REPO = "Faaabra/Auto-queue"
 
 # ==========================================
 # SOLICITUD DE PRIVILEGIOS DE ADMINISTRADOR
@@ -231,19 +228,32 @@ class App(ctk.CTk):
     def check_for_updates(self):
         def check_logic():
             try:
-                req = urllib.request.Request(UPDATE_INFO_URL, headers={'User-Agent': 'Mozilla/5.0'})
+                import urllib.request
+                import json
+                
+                api_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+                req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=5) as response:
                     data = json.loads(response.read().decode())
                     
-                latest_version = data.get("version", CURRENT_VERSION)
-                download_url = data.get("download_url", "")
+                # Extraemos "v2.0.1" -> "2.0.1"
+                latest_tag = data.get("tag_name", "").replace("v", "").strip()
                 
-                if latest_version != CURRENT_VERSION and download_url:
-                    self.after(1000, lambda: self.show_update_prompt(latest_version, download_url))
+                # Si la version de la release de github es diferente a la actual
+                if latest_tag and latest_tag != CURRENT_VERSION:
+                    download_url = ""
+                    # Buscamos el ejecutable en los archivos subidos de la release
+                    for asset in data.get("assets", []):
+                        if asset.get("name", "").endswith(".exe"):
+                            download_url = asset.get("browser_download_url")
+                            break
+                            
+                    if download_url:
+                        self.after(1000, lambda: self.show_update_prompt(latest_tag, download_url))
             except Exception:
                 pass
                 
-        if UPDATE_INFO_URL != "ENLACE_AQUI":
+        if GITHUB_REPO:
             threading.Thread(target=check_logic, daemon=True).start()
 
     def show_update_prompt(self, latest_version, download_url):
@@ -298,6 +308,7 @@ class App(ctk.CTk):
                 
                 with open(new_exe_path, "wb") as f:
                     downloaded = 0
+                    last_progress = -1
                     while True:
                         buffer = response.read(8192)
                         if not buffer:
@@ -306,30 +317,46 @@ class App(ctk.CTk):
                         f.write(buffer)
                         if total_size > 0:
                             progress = downloaded / total_size
-                            self.after(0, lambda p=progress: self.update_progress.set(p))
-                            
+                            # Actualizar barra de progreso solo cuando cambia en más de 1% para no ahogar a Tkinter
+                            if progress - last_progress > 0.01:
+                                last_progress = progress
+                                self.after(0, lambda p=progress: self.update_progress.set(p))
+                                
             current_exe = sys.executable
-            bat_path = os.path.join(tempfile.gettempdir(), "updater_rustqueue.bat")
             
-            bat_content = f'''@echo off
-echo ===========================================
-echo Instalando nueva version de RustAutoQueue
-echo ===========================================
-echo Por favor espera unos segundos...
-timeout /t 3 /nobreak >nul
-copy /y "{new_exe_path}" "{current_exe}"
+            # Preparar un archivo batch que se encargará de sustituir la app mientras está cerrada
+            bat_path = os.path.join(tempfile.gettempdir(), "update_rust_autoqueue.bat")
+            
+            exe_dir = os.path.dirname(current_exe)
+            bat_content = f"""@echo off
+ping 127.0.0.1 -n 3 > nul
+move /y "{new_exe_path}" "{current_exe}"
+cd /d "{exe_dir}"
 start "" "{current_exe}"
-del "{new_exe_path}"
 del "%~f0"
-'''
-            with open(bat_path, "w", encoding="utf-8") as f:
+"""
+            with open(bat_path, "w") as f:
                 f.write(bat_content)
-                
-            CREATE_NO_WINDOW = 0x08000000
-            subprocess.Popen(["cmd.exe", "/c", bat_path], creationflags=CREATE_NO_WINDOW)
+
+            # IMPORTANTE: Limpiar el entorno heredado de PyInstaller
+            env = dict(os.environ)
+            for k in list(env.keys()):
+                key_up = k.upper()
+                if 'MEI' in key_up or 'TCL' in key_up or 'TK' in key_up or 'PY' in key_up:
+                    env.pop(k, None)
+                    
+            # Restaurar SYSTEMROOT y PATH si hubieran caido
+            if 'SYSTEMROOT' not in env:
+                env['SYSTEMROOT'] = os.environ.get('SYSTEMROOT', r'C:\Windows')
+
+            # Lanzamos el proceso .bat de manera silenciosa para que haga el trabajo sucio
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             
-            self.after(0, self.destroy)
-            self.after(100, sys.exit)
+            subprocess.Popen([bat_path], env=env, startupinfo=startupinfo, shell=True)
+            
+            # Suicidar la aplicación actual violentamente para destrabar los handles del exe actual
+            os._exit(0)
             
         except Exception as e:
             self.after(0, lambda error=e: messagebox.showerror("Error", f"Fallo al actualizar: {error}"))
