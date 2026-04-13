@@ -110,7 +110,7 @@ class App(ctk.CTk):
         self.req_label = ctk.CTkLabel(self.req_frame, text="🔑 AUTO-INICIO DE WINDOWS", font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"), text_color="#ffcc00")
         self.req_label.pack(pady=(15, 0))
         
-        self.req_desc = ctk.CTkLabel(self.req_frame, text="Tus datos se introducirán en el Registro para arrancar solo.", font=font_small, text_color="#aaaaaa")
+        self.req_desc = ctk.CTkLabel(self.req_frame, text="Imprescindible para que el PC inicie sesión solo al despertarse.", font=font_small, text_color="#aaaaaa")
         self.req_desc.pack(pady=(0, 5))
         
         cred_frame = ctk.CTkFrame(self.req_frame, fg_color="transparent")
@@ -136,9 +136,13 @@ class App(ctk.CTk):
         self.pw_entry = ctk.CTkEntry(pw_inner_frame, placeholder_text="Contraseña de inicio de Windows", show="*", font=font_text, height=35)
         self.pw_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
 
-        # Boton de BIOS
-        self.btn_req_bios = ctk.CTkButton(self.req_frame, text="Ver cómo Configurar BIOS (Encendido Automático)", font=font_small, fg_color="transparent", border_width=1, border_color="#555", text_color="#ccc", hover_color="#333", height=30, command=self.open_bios_guide)
-        self.btn_req_bios.pack(padx=15, pady=(0, 15), fill="x")
+        # Botón Modo Auto-Despertar (NUEVO)
+        self.btn_auto_wake = ctk.CTkButton(self.req_frame, text="⏰ Modo Auto-Despertar", 
+                                        font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+                                        fg_color="#1a1a1a", border_width=1, border_color=COLOR_RUST_RED, 
+                                        text_color="white", hover_color="#333", height=35, 
+                                        command=self.open_auto_wake)
+        self.btn_auto_wake.pack(padx=15, pady=(0, 15), fill="x")
 
         # --- SETTINGS FRAME ---
         self.settings_frame = ctk.CTkFrame(self, corner_radius=12)
@@ -620,57 +624,168 @@ del "%~f0"
         desc_lbl = ctk.CTkLabel(tf, text=normal_desc, font=ctk.CTkFont(family="Segoe UI", size=13), text_color="#aaaaaa", justify="left", wraplength=400)
         desc_lbl.pack(anchor="w")
 
-    def open_bios_guide(self):
-        w = ctk.CTkToplevel(self)
-        w.title("Guía: Encendido Automático")
+    # --- LÓGICA DEL MODO AUTO-DESPERTAR ---
+    def cancel_wake_task(self, silent=False):
+        try:
+            subprocess.run(["schtasks", "/delete", "/tn", "RustAutoQueueWake", "/f"], 
+                           capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            if not silent:
+                messagebox.showinfo("Cancelado", "Despertador cancelado correctamente.")
+        except:
+            if not silent:
+                messagebox.showerror("Error", "No se pudo cancelar la tarea.")
+
+    def create_wake_task(self, h, m):
+        import datetime
+        now = datetime.datetime.now()
+        wake_time = now.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
         
-        window_width = 520
-        window_height = 640
-        screen_width = self.winfo_screenwidth()
-        screen_height = self.winfo_screenheight()
-        x_cordinate = int((screen_width / 2) - (window_width / 2))
-        y_cordinate = int((screen_height / 2) - (window_height / 2))
-        w.geometry(f"{window_width}x{window_height}+{x_cordinate}+{y_cordinate}")
+        # Si la hora ya pasó hoy, programar para mañana
+        if wake_time <= now:
+            wake_time += datetime.timedelta(days=1)
+            
+        time_str = wake_time.strftime("%Y-%m-%dT%H:%M:%S")
+        
+        # XML para la tarea programada con WakeToRun activado
+        xml_template = f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers>
+    <TimeTrigger>
+      <StartBoundary>{time_str}</StartBoundary>
+      <Enabled>true</Enabled>
+    </TimeTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>false</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>true</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>true</WakeToRun>
+    <ExecutionTimeLimit>PT72H</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>shutdown.exe</Command>
+      <Arguments>/r /t 0 /f</Arguments>
+    </Exec>
+  </Actions>
+</Task>"""
+        
+        try:
+            # Guardar XML temporal con encoding UTF-16 necesario para schtasks
+            tmp_xml = os.path.join(tempfile.gettempdir(), "wake_task.xml")
+            with open(tmp_xml, "w", encoding="utf-16") as f:
+                f.write(xml_template)
+            
+            # Crear la tarea
+            res = subprocess.run(["schtasks", "/create", "/tn", "RustAutoQueueWake", "/xml", tmp_xml, "/f"], 
+                                 capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            
+            if res.returncode == 0:
+                messagebox.showinfo("Programado", f"¡Listo! El PC se despertará y reiniciará a las {h}:{m}.\n\nRECUERDA: Ahora debes darle a 'Suspender' o 'Hibernar' en Windows.")
+            else:
+                messagebox.showerror("Error", f"No se pudo crear la tarea:\n{res.stderr.decode(errors='ignore')}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Error al generar despertador: {e}")
+
+    def open_auto_wake(self):
+        w = ctk.CTkToplevel(self)
+        w.title("⏰ Modo Auto-Despertar")
+        w.geometry("560x650")
         w.resizable(False, False)
         
-        import sys
+        # Centrar
+        x = int(self.winfo_x() + (self.winfo_width() / 2) - 280)
+        y = int(self.winfo_y() + (self.winfo_height() / 2) - 325)
+        w.geometry(f"+{x}+{y}")
+        w.transient(self)
+        
+        # Icono (Corregido para que aparezca siempre)
         if hasattr(sys, '_MEIPASS'):
             icon_path = os.path.join(sys._MEIPASS, 'rust.ico')
         else:
             icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rust.ico')
+            
         if os.path.exists(icon_path):
             try: 
                 w.iconbitmap(icon_path)
+                # Truco de Tkinter para forzar el icono en Toplevel
                 w.after(200, lambda: w.iconbitmap(icon_path))
             except: pass
-            
-        w.transient(self)
+
+        # Título
+        ctk.CTkLabel(w, text="⏰ MODO AUTO-DESPERTAR", font=ctk.CTkFont(size=24, weight="bold"), text_color=COLOR_RUST_RED).pack(pady=(20, 5))
+        ctk.CTkLabel(w, text="Cómo entrar al server mientras duermes", font=ctk.CTkFont(size=14), text_color="#aaa").pack(pady=(0, 20))
+
+        # Pestañas
+        tabview = ctk.CTkTabview(w, width=500, height=480, segmented_button_selected_color=COLOR_RUST_RED, segmented_button_selected_hover_color=COLOR_RUST_HOVER)
+        tabview.pack(padx=20, pady=10)
+
+        t1 = tabview.add("🔌 Enchufe Inteligente")
+        t2 = tabview.add("⏱️ BIOS RTC")
+        t3 = tabview.add("🌙 Software (Beta)")
+
+        # CONTENIDO TAB 1: ENCHUFE INTELIGENTE
+        txt1 = ("Esta es la opción recomendada de Diego (faabra).\n\n"
+                "1. Compra un enchufe inteligente (Alexa, Google, etc).\n"
+                "2. En la BIOS de tu PC, busca la opción 'Restore on AC Power Loss' y ponla en 'Power On'.\n"
+                "3. Apaga el PC al 100% por la noche.\n"
+                "4. Programa en tu móvil que el enchufe se encienda a las 9:00 AM.\n\n"
+                "¡Al recibir corriente, el PC detectará que debe encenderse solo y lanzará la cola de Rust!")
+        ctk.CTkLabel(t1, text=txt1, justify="left", wraplength=440, font=ctk.CTkFont(size=13)).pack(pady=20, padx=20)
+
+        # CONTENIDO TAB 2: BIOS RTC
+        txt2 = ("Si no quieres comprar nada, usa el reloj interno de tu placa base.\n\n"
+                "1. Entra a la BIOS (F2 o SUPR al arrancar).\n"
+                "2. Busca 'Advanced' -> 'APM' o 'Power Management'.\n"
+                "3. Activa 'Power On By RTC' o 'RTC Alarm'.\n"
+                "4. Pon la hora exacta a la que quieres que el PC se despierte.\n"
+                "5. Guarda y apaga el PC.\n\n"
+                "El PC se encenderá físicamente a esa hora.")
+        ctk.CTkLabel(t2, text=txt2, justify="left", wraplength=440, font=ctk.CTkFont(size=13)).pack(pady=20, padx=20)
+
+        # CONTENIDO TAB 3: SOFTWARE (SLEEP TIMER)
+        ctk.CTkLabel(t3, text="Usa este despertador si no quieres tocar la BIOS.\n\nIMPORTANTE: Para que funcione, debes darle a SUSPENDER o HIBERNAR en Windows, no a Apagar.", 
+                     justify="left", wraplength=440, font=ctk.CTkFont(size=13, slant="italic"), text_color="#ffcc00").pack(pady=(10, 20))
         
-        title = ctk.CTkLabel(w, text="Configurar Encendido Automático", font=ctk.CTkFont(family="Segoe UI", size=24, weight="bold"), text_color=COLOR_RUST_RED)
-        title.pack(pady=(20, 5))
+        time_frame = ctk.CTkFrame(t3, fg_color="transparent")
+        time_frame.pack(pady=10)
         
-        intro = ctk.CTkLabel(w, text="Enseña a tu ordenador a encenderse por sí mismo a una hora:", font=ctk.CTkFont(family="Segoe UI", size=13), text_color=COLOR_LIGHT_TEXT)
-        intro.pack(pady=(0, 15), padx=20)
+        ctk.CTkLabel(time_frame, text="Hora:", font=ctk.CTkFont(size=13, weight="bold")).pack(side="left", padx=5)
+        self.combo_h = ctk.CTkComboBox(time_frame, values=[f"{i:02d}" for i in range(24)], width=70)
+        self.combo_h.set("09")
+        self.combo_h.pack(side="left", padx=5)
         
-        self.build_step(w, "1", "Entra a la BIOS", "Reinicia tu PC y aprieta muchas veces F2 o SUPR mientras arranca.", COLOR_RUST_RED)
-        self.build_step(w, "2", "Busca la sección de Energía", "Entra al Modo Avanzado (usualmente F7) y métete en 'Power Management', 'APM' o similar.", COLOR_RUST_RED)
-        self.build_step(w, "3", "Desactiva ErP Ready (Importante)", "Si tu BIOS tiene la función 'ErP Ready' ponla en Disabled, ¡si no, la placa no despertará!", COLOR_RUST_RED)
-        self.build_step(w, "4", "Programa la alarma", "Busca 'RTC Alarm' o 'Power On By RTC' y activalo. Pon Día '0' (todos los días) y hora e.g. 19:00:00", COLOR_RUST_RED)
-        self.build_step(w, "5", "Guarda los cambios", "Dale a F10 para guardar y salir.", COLOR_RUST_RED)
-        
-        alt_frame = ctk.CTkFrame(w, fg_color="#2a2a2a", corner_radius=8)
-        alt_frame.pack(fill="x", padx=30, pady=(15, 10))
-        
-        alt_text = "⚡ MODO FÁCIL: Si usas un enchufe inteligente o le cortas la luz al PC de noche, simplemente activa en tu BIOS la opción 'Restore on AC/Power Loss'. Se encenderá solo directo al darle luz."
-        note = ctk.CTkLabel(alt_frame, text=alt_text, font=ctk.CTkFont(family="Segoe UI", size=12), text_color="#ccc", wraplength=420, justify="left")
-        note.pack(pady=10, padx=15)
-        
-        def open_youtube():
-            import webbrowser
-            webbrowser.open("https://www.youtube.com/results?search_query=como+programar+encendido+automatico+pc+bios+rtc+alarm")
-            
-        yt_btn = ctk.CTkButton(w, text="Buscar video completo en YouTube", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"), fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER, height=45, command=open_youtube)
-        yt_btn.pack(pady=(10, 30))
+        ctk.CTkLabel(time_frame, text="Min:", font=ctk.CTkFont(size=13, weight="bold")).pack(side="left", padx=5)
+        self.combo_m = ctk.CTkComboBox(time_frame, values=[f"{i:02d}" for i in range(60)], width=70)
+        self.combo_m.set("30")
+        self.combo_m.pack(side="left", padx=5)
+
+        btn_prog = ctk.CTkButton(t3, text="⏰ Programar Despertador", fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER,
+                                command=lambda: self.create_wake_task(self.combo_h.get(), self.combo_m.get()))
+        btn_prog.pack(pady=20)
+
+        btn_cancel = ctk.CTkButton(t3, text="Cancelar Tarea Actual", fg_color="transparent", border_width=1, border_color="#555",
+                                   command=self.cancel_wake_task)
+        btn_cancel.pack(pady=5)
+
 
 if __name__ == "__main__":
     app = App()
