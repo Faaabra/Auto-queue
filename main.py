@@ -13,7 +13,7 @@ import urllib.request
 import urllib.error
 import tempfile
 
-CURRENT_VERSION = "2.0.3"
+CURRENT_VERSION = "2.0.4"
 # --- INFO DE ACTUALIZACIONES ---
 GITHUB_REPO = "Faaabra/Auto-queue"
 
@@ -46,6 +46,8 @@ COLOR_BLUE = "#4db8ff"
 # Rutas - Guardamos las IPs en AppData
 APPDATA_DIR = os.path.join(os.environ["APPDATA"], "RustAutoQueue")
 CONFIG_FILE = os.path.join(APPDATA_DIR, "servers.json")
+# Nuevo archivo para preferencias de la app
+SETTINGS_FILE = os.path.join(APPDATA_DIR, "settings.json")
 
 class App(ctk.CTk):
     def __init__(self):
@@ -68,6 +70,7 @@ class App(ctk.CTk):
             os.makedirs(APPDATA_DIR)
 
         self.servers_data = self.load_servers()
+        self.settings = self.load_settings()
 
         self.sys_user = os.environ.get('USERNAME', '')
         self.sys_domain = os.environ.get('USERDOMAIN', os.environ.get('COMPUTERNAME', ''))
@@ -381,6 +384,62 @@ del "%~f0"
                 json.dump(self.servers_data, f, indent=4)
         except: pass
 
+    # --- SISTEMA DE PREFERENCIAS ---
+    def load_settings(self):
+        default = {"wake_method": None}
+        if os.path.exists(SETTINGS_FILE):
+            try:
+                with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    for k, v in default.items():
+                        if k not in data: data[k] = v
+                    return data
+            except: pass
+        return default
+
+    def save_settings(self):
+        try:
+            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.settings, f, indent=4)
+        except: pass
+
+    def set_wake_method(self, method, window=None):
+        self.settings["wake_method"] = method
+        self.save_settings()
+        self.check_status()
+        if window:
+            self.refresh_auto_wake_ui(window)
+        method_name = "NINGUNO" if method is None else method.replace('_', ' ').upper()
+        messagebox.showinfo("Configurado", f"Método de despertar guardado: {method_name}")
+
+    def refresh_auto_wake_ui(self, window):
+        # Buscamos el tabview dentro de la ventana
+        tab_v = None
+        for widget in window.winfo_children():
+            if isinstance(widget, ctk.CTkTabview):
+                tab_v = widget
+                break
+        
+        if not tab_v: return
+        
+        method = self.settings.get("wake_method")
+        active_text = "✅ ESTE ES MI MÉTODO ACTIVO"
+        
+        # Limpiar etiquetas previas de "ACTIVO"
+        for tab_name in ["🔌 Enchufe Inteligente", "⏱️ BIOS RTC", "🌙 Software (Beta)"]:
+            tab = tab_v.tab(tab_name)
+            for child in tab.winfo_children():
+                if isinstance(child, ctk.CTkLabel) and child.cget("text") == active_text:
+                    child.destroy()
+        
+        # Añadir al tab correcto
+        if method == "smart_plug":
+            ctk.CTkLabel(tab_v.tab("🔌 Enchufe Inteligente"), text=active_text, text_color="#28a745", font=ctk.CTkFont(weight="bold")).pack(pady=5)
+        elif method == "bios":
+            ctk.CTkLabel(tab_v.tab("⏱️ BIOS RTC"), text=active_text, text_color="#28a745", font=ctk.CTkFont(weight="bold")).pack(pady=5)
+        elif method == "software":
+            ctk.CTkLabel(tab_v.tab("🌙 Software (Beta)"), text=active_text, text_color="#28a745", font=ctk.CTkFont(weight="bold")).pack(pady=5)
+
     def save_current_ip(self):
         raw_ip = self.ip_entry.get().strip()
         ip = raw_ip.replace("connect", "").strip() if raw_ip.startswith("connect") else raw_ip
@@ -443,21 +502,74 @@ del "%~f0"
         return None
 
     def check_status(self):
-        # Primero miramos si el .bat existe
+        # 1. Verificar Auto-Cola
+        queue_active = False
+        alias_display = ""
         if os.path.exists(self.startup_path):
+            queue_active = True
             active_ip = self.get_active_ip_from_bat()
             alias_display = active_ip
             for alias, ip in self.servers_data.items():
                 if ip == active_ip:
                     alias_display = alias
                     break
-                    
-            status_text = f"● ACTIVO ({alias_display}) ●" if alias_display else "● ACTIVO ●"
-            self.status_label.configure(text=status_text, text_color="#28a745")
             self.btn_activate.configure(text="ACTUALIZAR CONFIGURACIÓN")
         else:
-            self.status_label.configure(text="○  INACTIVO  ○", text_color="#888888")
             self.btn_activate.configure(text="ACTIVAR AUTO-COLA")
+
+        # 2. Verificar Auto-Logon
+        logon_active = False
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon", 0, winreg.KEY_READ)
+            val, _ = winreg.QueryValueEx(key, "AutoAdminLogon")
+            winreg.CloseKey(key)
+            if val == "1":
+                logon_active = True
+        except: pass
+
+        # 3. Lógica de TEXTO de Estado
+        if not queue_active:
+            self.status_label.configure(text="○  INACTIVO  ○", text_color="#888888")
+        elif queue_active and not logon_active:
+            self.status_label.configure(text="⚠️ PENDIENTE DE CONFIGURACIÓN", text_color="#ffcc00")
+        else:
+            display = f"({alias_display})" if alias_display else ""
+            self.status_label.configure(text=f"✨ TODO LISTO {display}", text_color="#28a745")
+
+        # 3. Verificar Despertador (Software + Manual)
+        wake_method = self.settings.get("wake_method")
+        wake_active = False
+        wake_label_text = "⏰ Modo Auto-Despertar"
+        wake_color = "white"
+        wake_border = COLOR_RUST_RED
+
+        if wake_method == "software":
+            try:
+                res = subprocess.run(["schtasks", "/query", "/tn", "RustAutoQueueWake", "/fo", "LIST"], 
+                                     capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW, text=True)
+                if res.returncode == 0:
+                    wake_active = True
+                    match = re.search(r'(\d{1,2}:\d{2})', res.stdout)
+                    t_str = f" ({match.group(1)})" if match else " (ON)"
+                    wake_label_text = f"⏰ Auto-Despertar: SOFTWARE{t_str}"
+            except: pass
+        elif wake_method == "smart_plug":
+            wake_active = True
+            wake_label_text = "⏰ Auto-Despertar: ENCHUFE SMART"
+        elif wake_method == "bios":
+            wake_active = True
+            wake_label_text = "⏰ Auto-Despertar: BIOS RTC"
+
+        if wake_active:
+            wake_color = "#28a745"
+            wake_border = "#28a745"
+            
+        self.btn_auto_wake.configure(text=wake_label_text, border_color=wake_border, text_color=wake_color)
+
+        # 4. Resumen en el status principal si todo está OK
+        if queue_active and logon_active:
+            display = f"({alias_display})" if alias_display else ""
+            self.status_label.configure(text=f"✨ TODO LISTO {display}", text_color="#28a745")
 
     def activate_auto_queue(self):
         # 1. Validación de IP de Servidor
@@ -700,20 +812,37 @@ del "%~f0"
             
             if res.returncode == 0:
                 messagebox.showinfo("Programado", f"¡Listo! El PC se despertará y reiniciará a las {h}:{m}.\n\nRECUERDA: Ahora debes darle a 'Suspender' o 'Hibernar' en Windows.")
+                self.settings["wake_method"] = "software"
+                self.save_settings()
+                self.check_status()
             else:
                 messagebox.showerror("Error", f"No se pudo crear la tarea:\n{res.stderr.decode(errors='ignore')}")
         except Exception as e:
             messagebox.showerror("Error", f"Error al generar despertador: {e}")
+            
+    def cancel_wake_task(self, silent=False):
+        try:
+            subprocess.run(["schtasks", "/delete", "/tn", "RustAutoQueueWake", "/f"], 
+                           capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            if self.settings.get("wake_method") == "software":
+                self.settings["wake_method"] = None
+                self.save_settings()
+            self.check_status()
+            if not silent:
+                messagebox.showinfo("Cancelado", "Despertador cancelado correctamente.")
+        except:
+            if not silent:
+                messagebox.showerror("Error", "No se pudo cancelar la tarea.")
 
     def open_auto_wake(self):
         w = ctk.CTkToplevel(self)
         w.title("⏰ Modo Auto-Despertar")
-        w.geometry("560x650")
+        w.geometry("560x680")
         w.resizable(False, False)
         
         # Centrar
         x = int(self.winfo_x() + (self.winfo_width() / 2) - 280)
-        y = int(self.winfo_y() + (self.winfo_height() / 2) - 325)
+        y = int(self.winfo_y() + (self.winfo_height() / 2) - 340)
         w.geometry(f"+{x}+{y}")
         w.transient(self)
         
@@ -726,7 +855,6 @@ del "%~f0"
         if os.path.exists(icon_path):
             try: 
                 w.iconbitmap(icon_path)
-                # Truco de Tkinter para forzar el icono en Toplevel
                 w.after(200, lambda: w.iconbitmap(icon_path))
             except: pass
 
@@ -750,6 +878,8 @@ del "%~f0"
                 "4. Programa en tu móvil que el enchufe se encienda a las 9:00 AM.\n\n"
                 "¡Al recibir corriente, el PC detectará que debe encenderse solo y lanzará la cola de Rust!")
         ctk.CTkLabel(t1, text=txt1, justify="left", wraplength=440, font=ctk.CTkFont(size=13)).pack(pady=20, padx=20)
+        ctk.CTkButton(t1, text="Usar este método (Enchufe)", fg_color="#333", border_width=1, border_color="#555",
+                      command=lambda: self.set_wake_method("smart_plug", w)).pack(pady=5)
 
         # CONTENIDO TAB 2: BIOS RTC
         txt2 = ("Si no quieres comprar nada, usa el reloj interno de tu placa base.\n\n"
@@ -760,6 +890,8 @@ del "%~f0"
                 "5. Guarda y apaga el PC.\n\n"
                 "El PC se encenderá físicamente a esa hora.")
         ctk.CTkLabel(t2, text=txt2, justify="left", wraplength=440, font=ctk.CTkFont(size=13)).pack(pady=20, padx=20)
+        ctk.CTkButton(t2, text="Usar este método (BIOS)", fg_color="#333", border_width=1, border_color="#555",
+                      command=lambda: self.set_wake_method("bios", w)).pack(pady=5)
 
         # CONTENIDO TAB 3: SOFTWARE (SLEEP TIMER)
         ctk.CTkLabel(t3, text="Usa este despertador si no quieres tocar la BIOS.\n\nIMPORTANTE: Para que funcione, debes darle a SUSPENDER o HIBERNAR en Windows, no a Apagar.", 
@@ -780,11 +912,17 @@ del "%~f0"
 
         btn_prog = ctk.CTkButton(t3, text="⏰ Programar Despertador", fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER,
                                 command=lambda: self.create_wake_task(self.combo_h.get(), self.combo_m.get()))
-        btn_prog.pack(pady=20)
+        btn_prog.pack(pady=10)
 
-        btn_cancel = ctk.CTkButton(t3, text="Cancelar Tarea Actual", fg_color="transparent", border_width=1, border_color="#555",
+        btn_cancel = ctk.CTkButton(t3, text="Cancelar Tarea de Windows", fg_color="transparent", border_width=1, border_color="#555",
                                    command=self.cancel_wake_task)
         btn_cancel.pack(pady=5)
+        
+        ctk.CTkButton(w, text="❌ Desactivar Todos los Métodos", fg_color="transparent", text_color="#777", font=ctk.CTkFont(size=11),
+                      command=lambda: self.set_wake_method(None, w)).pack(pady=10)
+        
+        # Mostrar el estado marcado
+        self.refresh_auto_wake_ui(w)
 
 
 if __name__ == "__main__":
