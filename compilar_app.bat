@@ -10,7 +10,7 @@ taskkill /F /IM "RustAutoQueue.exe" /T >nul 2>&1
 taskkill /F /IM "main.exe" /T >nul 2>&1
 echo.
 
-py -m PyInstaller --noconsole --uac-admin --onefile --name="RustAutoQueue" --icon="rust.ico" --add-data="rust.ico;." --add-data="assets;assets" --clean main.py
+py -m PyInstaller --noconsole --uac-admin --onefile --name="RustAutoQueue" --icon="rust.ico" --add-data="rust.ico;." --clean main.py
 
 echo.
 echo =======================================================

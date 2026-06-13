@@ -36,28 +36,6 @@ if not is_admin():
         ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, f'"{sys.argv[0]}"', None, 1)
     sys.exit()
 
-# ==========================================
-# CARGAR FUENTE PERSONALIZADA (Poppins)
-# ==========================================
-def load_custom_fonts():
-    try:
-        FR_PRIVATE  = 0x10
-        FR_NOT_ENUM = 0x20
-        flags = FR_PRIVATE | FR_NOT_ENUM
-        base_path = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(os.path.abspath(__file__))
-        font_dir = os.path.join(base_path, "assets", "fonts")
-        
-        fonts_to_load = ["Poppins-Regular.ttf", "Poppins-Bold.ttf"]
-        for font in fonts_to_load:
-            fp = os.path.join(font_dir, font)
-            if os.path.exists(fp):
-                ctypes.windll.gdi32.AddFontResourceExW(fp, flags, 0)
-    except Exception as e:
-        print(f"Error loading fonts: {e}")
-
-load_custom_fonts()
-UI_FONT = "Poppins"
-UI_FONT_BACKUP = "Segoe UI"
 ctk.set_appearance_mode("dark")
 
 # Colores personalizados
@@ -107,7 +85,7 @@ class Tooltip:
         tw.wm_overrideredirect(True)
         tw.wm_geometry(f"+{x}+{y}")
         label = tk.Label(tw, text=self.text, background="#2a2a2a", foreground="#cccccc",
-                         relief="flat", font=(UI_FONT, 11), padx=10, pady=6,
+                         relief="flat", font=("Segoe UI", 11), padx=10, pady=6,
                          wraplength=300, justify="left")
         label.pack()
 
@@ -181,7 +159,7 @@ class StyledDialog(ctk.CTkToplevel):
 
         title_lbl = ctk.CTkLabel(
             header_frame, text=title,
-            font=ctk.CTkFont(family=UI_FONT, size=17, weight="bold"),
+            font=ctk.CTkFont(family="Segoe UI", size=17, weight="bold"),
             text_color=icon_color, anchor="w"
         )
         title_lbl.pack(side="left", fill="x", expand=True)
@@ -193,7 +171,7 @@ class StyledDialog(ctk.CTkToplevel):
         # Message body
         msg_lbl = ctk.CTkLabel(
             container, text=message,
-            font=ctk.CTkFont(family=UI_FONT, size=13),
+            font=ctk.CTkFont(family="Segoe UI", size=13),
             text_color="#cccccc", wraplength=w - 80,
             justify="left", anchor="nw"
         )
@@ -203,7 +181,7 @@ class StyledDialog(ctk.CTkToplevel):
         if dialog_type == "input":
             self._entry = ctk.CTkEntry(
                 container, height=38,
-                font=ctk.CTkFont(family=UI_FONT, size=13),
+                font=ctk.CTkFont(family="Segoe UI", size=13),
                 fg_color="#1a1a1c", border_color="#333335",
                 placeholder_text=kwargs.get("placeholder", "")
             )
@@ -220,7 +198,7 @@ class StyledDialog(ctk.CTkToplevel):
                 btn_frame, text="Cancelar", width=120, height=38,
                 fg_color="transparent", border_width=1, border_color="#444",
                 hover_color="#2b2b2b", text_color="#aaaaaa",
-                font=ctk.CTkFont(family=UI_FONT, size=13, weight="bold"),
+                font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
                 command=self._on_cancel
             )
             btn_cancel.pack(side="right", padx=(8, 0))
@@ -228,7 +206,7 @@ class StyledDialog(ctk.CTkToplevel):
             btn_ok = ctk.CTkButton(
                 btn_frame, text="Aceptar", width=120, height=38,
                 fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER,
-                font=ctk.CTkFont(family=UI_FONT, size=13, weight="bold"),
+                font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
                 command=self._on_ok
             )
             btn_ok.pack(side="right")
@@ -238,7 +216,7 @@ class StyledDialog(ctk.CTkToplevel):
                 btn_frame, text="Cancelar", width=120, height=38,
                 fg_color="transparent", border_width=1, border_color="#444",
                 hover_color="#2b2b2b", text_color="#aaaaaa",
-                font=ctk.CTkFont(family=UI_FONT, size=13, weight="bold"),
+                font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
                 command=self._on_cancel
             )
             btn_cancel.pack(side="right", padx=(8, 0))
@@ -246,7 +224,7 @@ class StyledDialog(ctk.CTkToplevel):
             btn_ok = ctk.CTkButton(
                 btn_frame, text="Guardar", width=120, height=38,
                 fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER,
-                font=ctk.CTkFont(family=UI_FONT, size=13, weight="bold"),
+                font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
                 command=self._on_ok
             )
             btn_ok.pack(side="right")
@@ -268,7 +246,7 @@ class StyledDialog(ctk.CTkToplevel):
             btn_ok = ctk.CTkButton(
                 btn_frame, text="Entendido", width=140, height=38,
                 fg_color=btn_color, hover_color=btn_hover,
-                font=ctk.CTkFont(family=UI_FONT, size=13, weight="bold"),
+                font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
                 command=self._on_ok
             )
             btn_ok.pack(side="right")
@@ -362,27 +340,11 @@ class App(ctk.CTk):
         self.sys_domain = os.environ.get('USERDOMAIN', os.environ.get('COMPUTERNAME', ''))
 
         # Fuentes reutilizables
-        self.font_title = ctk.CTkFont(family=UI_FONT, size=36, weight="bold")
-        self.font_subtitle = ctk.CTkFont(family=UI_FONT, size=14, weight="bold")
-        self.font_label = ctk.CTkFont(family=UI_FONT, size=12, weight="bold")
-        self.font_text = ctk.CTkFont(family=UI_FONT, size=12)
-        self.font_small = ctk.CTkFont(family=UI_FONT, size=11)
-
-        # Cargar iconos
-        from PIL import Image
-        base_path = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(os.path.abspath(__file__))
-        icons_dir = os.path.join(base_path, "assets", "icons")
-        
-        def load_icon(filename, size=(16, 16)):
-            path = os.path.join(icons_dir, filename)
-            if os.path.exists(path):
-                return ctk.CTkImage(light_image=Image.open(path), dark_image=Image.open(path), size=size)
-            return None
-
-        self.icon_play = load_icon("play.png")
-        self.icon_copy = load_icon("copy.png")
-        self.icon_edit = load_icon("edit.png")
-        self.icon_delete = load_icon("delete.png")
+        self.font_title = ctk.CTkFont(family="Segoe UI", size=36, weight="bold")
+        self.font_subtitle = ctk.CTkFont(family="Segoe UI", size=14, weight="bold")
+        self.font_label = ctk.CTkFont(family="Segoe UI", size=12, weight="bold")
+        self.font_text = ctk.CTkFont(family="Segoe UI", size=12)
+        self.font_small = ctk.CTkFont(family="Segoe UI", size=11)
 
         if hasattr(sys, '_MEIPASS'):
             icon_path = os.path.join(sys._MEIPASS, 'rust.ico')
@@ -394,11 +356,6 @@ class App(ctk.CTk):
             except Exception:
                 pass
 
-    def open_donation_link(self):
-        import webbrowser
-        webbrowser.open("https://ko-fi.com/faaabra") # Cambia este link por el real
-
-    def load_servers(self):
         self.startup_path = os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\AutoRustLauncher.bat")
 
         # Timer para debounce del slider
@@ -410,9 +367,9 @@ class App(ctk.CTk):
         self.sidebar_frame.pack_propagate(False)
         
         # Logotipo en el sidebar
-        logo_label = ctk.CTkLabel(self.sidebar_frame, text="RUST", font=ctk.CTkFont(family=UI_FONT, size=24, weight="bold"), text_color=COLOR_RUST_RED)
+        logo_label = ctk.CTkLabel(self.sidebar_frame, text="RUST", font=ctk.CTkFont(family="Segoe UI", size=24, weight="bold"), text_color=COLOR_RUST_RED)
         logo_label.pack(pady=(25, 0))
-        logo_sub = ctk.CTkLabel(self.sidebar_frame, text="AUTO-QUEUE V2", font=ctk.CTkFont(family=UI_FONT, size=11, weight="bold"), text_color="white")
+        logo_sub = ctk.CTkLabel(self.sidebar_frame, text="AUTO-QUEUE V2", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color="white")
         logo_sub.pack(pady=(0, 30))
 
         # Contenedor de paneles (Derecha)
@@ -443,26 +400,12 @@ class App(ctk.CTk):
                 fg_color="transparent",
                 text_color="#aaaaaa",
                 hover_color="#2b2b2b",
-                font=ctk.CTkFont(family=UI_FONT, size=13, weight="bold"),
+                font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
                 anchor="w",
                 command=lambda p=page_id: self.switch_page(p)
             )
             btn.pack(fill="x", padx=15, pady=5)
             self.nav_buttons[page_id] = btn
-
-        # Botón de Donar / Premium
-        btn_donate = ctk.CTkButton(
-            self.sidebar_frame,
-            text="Apoyar Proyecto",
-            height=36,
-            corner_radius=8,
-            fg_color="#c4713b",
-            text_color="white",
-            hover_color="#a86032",
-            font=ctk.CTkFont(family=UI_FONT, size=12, weight="bold"),
-            command=self.open_donation_link
-        )
-        btn_donate.pack(side="bottom", fill="x", padx=15, pady=20)
 
         # Crear las páginas
         self.create_home_page()
@@ -542,10 +485,10 @@ class App(ctk.CTk):
         except Exception:
             pass
         
-        title = ctk.CTkLabel(w, text="¡Nueva Versión Encontrada!", font=ctk.CTkFont(family=UI_FONT, size=20, weight="bold"), text_color=COLOR_BLUE)
+        title = ctk.CTkLabel(w, text="¡Nueva Versión Encontrada!", font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold"), text_color=COLOR_BLUE)
         title.pack(pady=(25, 10))
         
-        desc = ctk.CTkLabel(w, text=f"Hay una nueva versión ({latest_version}) para descargar.\nTienes instalada la {CURRENT_VERSION}.\n\n¿Deseas descargarla e instalarla ahora?", font=ctk.CTkFont(family=UI_FONT, size=13))
+        desc = ctk.CTkLabel(w, text=f"Hay una nueva versión ({latest_version}) para descargar.\nTienes instalada la {CURRENT_VERSION}.\n\n¿Deseas descargarla e instalarla ahora?", font=ctk.CTkFont(family="Segoe UI", size=13))
         desc.pack(pady=10)
         
         self.update_progress = ctk.CTkProgressBar(w, width=300, progress_color=COLOR_BLUE)
@@ -1188,7 +1131,7 @@ del "%~f0"
         col0 = ctk.CTkFrame(home_page, fg_color="transparent")
         col0.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
         
-        lbl_title = ctk.CTkLabel(col0, text="PARÁMETROS", font=ctk.CTkFont(family=UI_FONT, size=18, weight="bold"), text_color=COLOR_RUST_RED)
+        lbl_title = ctk.CTkLabel(col0, text="PARÁMETROS", font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"), text_color=COLOR_RUST_RED)
         lbl_title.pack(anchor="w", pady=(0, 15))
         
         # Section 1: Server IP
@@ -1313,7 +1256,7 @@ del "%~f0"
         col1 = ctk.CTkFrame(home_page, fg_color="transparent")
         col1.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
         
-        lbl_status_title = ctk.CTkLabel(col1, text="ESTADO DEL SISTEMA", font=ctk.CTkFont(family=UI_FONT, size=18, weight="bold"), text_color=COLOR_RUST_RED)
+        lbl_status_title = ctk.CTkLabel(col1, text="ESTADO DEL SISTEMA", font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"), text_color=COLOR_RUST_RED)
         lbl_status_title.pack(anchor="w", pady=(0, 15))
         
         self.status_frame = ctk.CTkFrame(col1, fg_color="#1a1a1a", border_width=1, border_color="#2d2d2d", corner_radius=10, height=80)
@@ -1370,7 +1313,7 @@ del "%~f0"
             height=48,
             fg_color=COLOR_RUST_RED,
             hover_color=COLOR_RUST_HOVER,
-            font=ctk.CTkFont(family=UI_FONT, size=14, weight="bold"),
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
             command=self.activate_auto_queue
         )
         self.btn_activate.pack(fill="x", pady=(20, 8))
@@ -1428,7 +1371,7 @@ del "%~f0"
         header = ctk.CTkFrame(servers_page, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
         
-        lbl_title = ctk.CTkLabel(header, text="MIS SERVIDORES", font=ctk.CTkFont(family=UI_FONT, size=22, weight="bold"), text_color=COLOR_RUST_RED)
+        lbl_title = ctk.CTkLabel(header, text="MIS SERVIDORES", font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"), text_color=COLOR_RUST_RED)
         lbl_title.pack(side="left")
         
         # Add server inline frame (form)
@@ -1529,7 +1472,7 @@ del "%~f0"
             lbl_alias = ctk.CTkLabel(alias_header, text=alias, font=self.font_subtitle, text_color="white", anchor="w")
             lbl_alias.pack(side="left")
             if is_active:
-                ctk.CTkLabel(alias_header, text=" ACTIVO", font=ctk.CTkFont(family=UI_FONT, size=11, weight="bold"),
+                ctk.CTkLabel(alias_header, text=" ACTIVO", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
                              text_color="#28a745").pack(side="left", padx=(6, 0))
 
             # IP + Status row
@@ -1542,7 +1485,7 @@ del "%~f0"
             # Status indicator (dot + text)
             status_dot = ctk.CTkLabel(ip_status_frame, text="●", font=ctk.CTkFont(size=10), text_color="#888888", width=14)
             status_dot.pack(side="left", padx=(10, 2))
-            status_label = ctk.CTkLabel(ip_status_frame, text="Comprobando...", font=ctk.CTkFont(family=UI_FONT, size=10), text_color="#888888")
+            status_label = ctk.CTkLabel(ip_status_frame, text="Comprobando...", font=ctk.CTkFont(family="Segoe UI", size=10), text_color="#888888")
             status_label.pack(side="left")
 
             # Launch async ping
@@ -1570,14 +1513,19 @@ del "%~f0"
                     self.save_servers()
                     self.refresh_server_list(window)
             
-            btn_sel = ctk.CTkButton(row, text=" Usar", width=80, height=32, font=self.font_label, image=self.icon_play, fg_color="#333335", hover_color="#444446", command=select_cmd)
+            btn_sel = ctk.CTkButton(row, text="Usar", width=70, height=32, font=self.font_label, 
+                                    fg_color="#333335", hover_color="#444446", command=select_cmd)
             btn_sel.pack(side="left", padx=5, pady=6)
 
-            btn_copy = ctk.CTkButton(row, text="", width=40, height=32, image=self.icon_copy, fg_color="#2b2b2d", hover_color="#3b3b3f", border_width=1, border_color="#555", command=copy_cmd)
+            btn_copy = ctk.CTkButton(row, text="Copiar", width=60, height=32, font=self.font_label,
+                                     fg_color="#2b2b2d", hover_color="#3b3b3f", border_width=1, border_color="#555",
+                                     command=copy_cmd)
             btn_copy.pack(side="left", padx=(0, 2), pady=6)
             Tooltip(btn_copy, "Copiar IP al portapapeles")
 
-            btn_edit = ctk.CTkButton(row, text="", width=40, height=32, image=self.icon_edit, fg_color="#2b2b2d", hover_color="#3b3b3f", border_width=1, border_color="#555", command=edit_cmd)
+            btn_edit = ctk.CTkButton(row, text="Editar", width=60, height=32, font=self.font_label,
+                                     fg_color="#2b2b2d", hover_color="#3b3b3f", border_width=1, border_color="#555",
+                                     command=edit_cmd)
             btn_edit.pack(side="left", padx=(0, 2), pady=6)
             Tooltip(btn_edit, "Renombrar Servidor")
             
@@ -1679,16 +1627,16 @@ del "%~f0"
         f = ctk.CTkFrame(parent, fg_color="transparent")
         f.pack(fill="x", padx=15, pady=4)
         
-        num_lbl = ctk.CTkLabel(f, text=f"{number}.", font=ctk.CTkFont(family=UI_FONT, size=18, weight="bold"), text_color=color, width=25)
+        num_lbl = ctk.CTkLabel(f, text=f"{number}.", font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"), text_color=color, width=25)
         num_lbl.pack(side="left", anchor="n", pady=(2,0))
         
         tf = ctk.CTkFrame(f, fg_color="transparent")
         tf.pack(side="left", fill="x", expand=True)
         
-        title_lbl = ctk.CTkLabel(tf, text=bold_title, font=ctk.CTkFont(family=UI_FONT, size=14, weight="bold"), text_color="white", justify="left")
+        title_lbl = ctk.CTkLabel(tf, text=bold_title, font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"), text_color="white", justify="left")
         title_lbl.pack(anchor="w")
         
-        desc_lbl = ctk.CTkLabel(tf, text=normal_desc, font=ctk.CTkFont(family=UI_FONT, size=13), text_color="#aaaaaa", justify="left", wraplength=400)
+        desc_lbl = ctk.CTkLabel(tf, text=normal_desc, font=ctk.CTkFont(family="Segoe UI", size=13), text_color="#aaaaaa", justify="left", wraplength=400)
         desc_lbl.pack(anchor="w")
 
     def create_wake_task(self, h, m):
@@ -1786,7 +1734,7 @@ del "%~f0"
         header = ctk.CTkFrame(wake_page, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 5))
         
-        lbl_title = ctk.CTkLabel(header, text="AUTO-DESPERTAR", font=ctk.CTkFont(family=UI_FONT, size=22, weight="bold"), text_color=COLOR_RUST_RED)
+        lbl_title = ctk.CTkLabel(header, text="AUTO-DESPERTAR", font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"), text_color=COLOR_RUST_RED)
         lbl_title.pack(side="left")
         
         lbl_subtitle = ctk.CTkLabel(wake_page, text="Elige cómo encender el PC automáticamente para saltarte las colas.", font=self.font_subtitle, text_color="#aaa")
@@ -1877,18 +1825,21 @@ del "%~f0"
         header = ctk.CTkFrame(logs_page, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
         
-        lbl_title = ctk.CTkLabel(header, text="REGISTRO DE ACTIVIDAD", font=ctk.CTkFont(family=UI_FONT, size=22, weight="bold"), text_color=COLOR_RUST_RED)
+        lbl_title = ctk.CTkLabel(header, text="REGISTRO DE ACTIVIDAD", font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"), text_color=COLOR_RUST_RED)
         lbl_title.pack(side="left")
         
-        # Scrollable Frame for logs
-        self.log_scroll = ctk.CTkScrollableFrame(
+        # Textbox for logs
+        self.log_textbox = ctk.CTkTextbox(
             logs_page,
+            font=ctk.CTkFont(family="Consolas", size=11),
             fg_color="#101012",
             border_color="#2b2b2f",
             border_width=1,
-            corner_radius=8
+            text_color="#cccccc",
+            activate_scrollbars=True
         )
-        self.log_scroll.grid(row=1, column=0, sticky="nsew", padx=20, pady=5)
+        self.log_textbox.grid(row=1, column=0, sticky="nsew", padx=20, pady=5)
+        self.log_textbox.configure(state="disabled")
         
         # Footer buttons
         footer = ctk.CTkFrame(logs_page, fg_color="transparent")
@@ -1924,60 +1875,25 @@ del "%~f0"
         self.refresh_log_viewer()
 
     def refresh_log_viewer(self):
-        if not hasattr(self, 'log_scroll') or not self.log_scroll.winfo_exists():
+        if not hasattr(self, 'log_textbox') or not self.log_textbox.winfo_exists():
             return
             
-        for widget in self.log_scroll.winfo_children():
-            widget.destroy()
+        self.log_textbox.configure(state="normal")
+        self.log_textbox.delete("1.0", "end")
         
         if os.path.exists(LOG_FILE):
             try:
                 with open(LOG_FILE, "r", encoding="utf-8") as f:
                     lines = f.readlines()
                 tail_lines = lines[-150:]
-                
-                if not tail_lines:
-                    self._add_log_label("No hay registros de actividad todavía.", "#777777")
-                    return
-
-                for line in tail_lines:
-                    line = line.strip()
-                    if not line: continue
-                    
-                    color = "#cccccc" # Default text color
-                    if "error" in line.lower() or "fallo" in line.lower() or "timeout" in line.lower():
-                        color = COLOR_RUST_RED
-                    elif "aviso" in line.lower() or "warning" in line.lower() or "intentando" in line.lower():
-                        color = COLOR_YELLOW
-                    elif "conectado" in line.lower() or "éxito" in line.lower():
-                        color = COLOR_GREEN
-                    elif "iniciada" in line.lower() or "info" in line.lower() or "limpiado" in line.lower():
-                        color = COLOR_BLUE
-
-                    # Check if line has timestamp: "YYYY-MM-DD HH:MM:SS  Message"
-                    if len(line) > 19 and line[4] == '-' and line[19] == ' ':
-                        timestamp = line[:19]
-                        message = line[20:].strip()
-                        
-                        row_frame = ctk.CTkFrame(self.log_scroll, fg_color="transparent")
-                        row_frame.pack(fill="x", anchor="w", pady=2)
-                        
-                        lbl_time = ctk.CTkLabel(row_frame, text=f"[{timestamp}]", font=ctk.CTkFont(family="Consolas", size=11), text_color="#555555")
-                        lbl_time.pack(side="left", padx=(0, 10))
-                        
-                        lbl_msg = ctk.CTkLabel(row_frame, text=message, font=self.font_text, text_color=color, anchor="w", justify="left")
-                        lbl_msg.pack(side="left", fill="x", expand=True)
-                    else:
-                        self._add_log_label(line, color)
-                        
+                self.log_textbox.insert("1.0", "".join(tail_lines))
             except Exception as e:
-                self._add_log_label(f"Error al leer el archivo de registros: {e}", COLOR_RUST_RED)
+                self.log_textbox.insert("1.0", f"Error al leer el archivo de registros: {e}")
         else:
-            self._add_log_label("No hay registros de actividad todavía.", "#777777")
-
-    def _add_log_label(self, text, color):
-        lbl = ctk.CTkLabel(self.log_scroll, text=text, font=self.font_text, text_color=color, anchor="w", justify="left")
-        lbl.pack(fill="x", anchor="w", pady=2)
+            self.log_textbox.insert("1.0", "No hay registros de actividad todavía.")
+            
+        self.log_textbox.configure(state="disabled")
+        self.log_textbox.see("end")
 
     def clear_log_file(self):
         if styled_askyesno(self, "Confirmar", "¿Seguro que quieres borrar el archivo de actividad?"):
