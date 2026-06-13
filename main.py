@@ -65,6 +65,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger("RustAutoQueue")
 
+# ===================================================================
+# SERVIDORES DESTACADOS (CURATED LIST)
+# ===================================================================
+FEATURED_SERVERS = [
+    {"alias": "RUSTORIA EU MAIN", "ip": "eu.rustoria.co:28015", "desc": "Wipe Semanal | Vanilla | Pop: Alta"},
+    {"alias": "ATLAS X2 QUAD", "ip": "2xmonthlyquad.atlasrust.uk:28015", "desc": "Wipe Mensual | 2x | Max 4"},
+    {"alias": "STEVIOUS 2X LARGE", "ip": "play.stevious.io:28015", "desc": "Wipe Bisemanal | 2x | Max 8"},
+    {"alias": "RUSTAFIED EU MAIN", "ip": "eumain.rustafied.com:28015", "desc": "Wipe Semanal | Vanilla | Oficial"},
+    {"alias": "WARBAND 2X SOLO/DUO", "ip": "play.warband.gg:28015", "desc": "Wipe Semanal | 2x | Max 2"},
+    {"alias": "BLOO LAGOON", "ip": "play.bloolagoon.com:28015", "desc": "Wipe Semanal | 1.5x | Max 6"},
+    {"alias": "VITAL RUST 10X", "ip": "play.vitalrust.com:28015", "desc": "Wipe Semanal | 10x | PvP/Clanes"},
+    {"alias": "RENEGADE 2X MAIN", "ip": "eu.renegaderust.com:28015", "desc": "Wipe Semanal | 2x | No Limit"},
+    {"alias": "ANDROMEDA 2X TRIO", "ip": "play.andromedarust.com:28015", "desc": "Wipe Semanal | 2x | Max 3"},
+    {"alias": "LIMITLESS 2X", "ip": "play.limitlessrust.com:28015", "desc": "Wipe Bisemanal | 2x | Vanilla+"}
+]
 
 class Tooltip:
     """Tooltip que aparece al pasar el ratón sobre un widget."""
@@ -680,27 +695,97 @@ del "%~f0"
         elif method == "software":
             ctk.CTkLabel(tab_v.tab("Software (Beta)"), text=active_text, text_color="#28a745", font=ctk.CTkFont(weight="bold")).pack(pady=5)
 
-    def save_current_ip(self):
-        raw_ip = self.ip_entry.get().strip()
-        ip = raw_ip
-        if ip.startswith("client.connect"):
-            ip = ip[14:].strip()
-        elif ip.startswith("connect"):
-            ip = ip[7:].strip()
-            
-        if not ip:
-            styled_showwarning(self, "Falta dirección", "Introduce o pega una IP o dominio en la barra antes de pulsar Guardar.")
+    def get_current_ip_from_entry(self):
+        raw_val = self.ip_entry.get().strip()
+        if not raw_val or raw_val == "Selecciona un servidor...": return ""
+        if raw_val in self.servers_data:
+            data = self.servers_data[raw_val]
+            return data["ip"] if isinstance(data, dict) else data
+        return raw_val
+
+    def on_home_server_selected(self, choice_or_event=None):
+        raw_val = self.ip_entry.get().strip()
+        if not raw_val or raw_val == "Selecciona un servidor..." or not hasattr(self, 'home_card'):
+            if hasattr(self, 'home_card') and self.home_card.winfo_manager():
+                self.home_card.pack_forget()
             return
-        if not IP_PORT_RE.match(ip):
-            styled_showwarning(self, "Formato incorrecto",
-                f"La dirección '{ip}' no parece válida.\nDebe ser una IP o dominio (con o sin puerto).\nEjemplos:\n- 192.168.1.100:28015\n- jugar.rustserver.com:28015")
-            return
             
-        alias = styled_input(self, "Guardar IP", "Introduce un nombre (Alias) para tu servidor:", placeholder="Ej: Rustafied EU")
-        if alias not in self.servers_data:
-            self.servers_data[alias] = {"ip": ip, "fav": False}
-            self.save_servers()
-            styled_showinfo(self, "Guardado", f"¡'{alias}' guardado en tus servidores!")
+        ip = self.get_current_ip_from_entry()
+        self.home_card.pack(fill="x", pady=(0, 10), after=self.ip_frame)
+        
+        self.hc_title.configure(text=raw_val if raw_val in self.servers_data else "Servidor No Guardado")
+        self.hc_status.configure(text=" ● COMPROBANDO ", text_color="#aaa")
+        self.hc_ping.configure(text="Ping: --")
+        self.hc_players.configure(text="--/-- PLAYERS")
+        
+        def do_fetch():
+            import socket, re, subprocess, threading
+            host = ip.split(":")[0] if ":" in ip else ip
+            port = int(ip.split(":")[1]) if ":" in ip else 28015
+            
+            a2s_data = None
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(2.0)
+            try:
+                sock.sendto(b'\xFF\xFF\xFF\xFFTSource Engine Query\x00', (host, port))
+                data, _ = sock.recvfrom(4096)
+                if data.startswith(b'\xFF\xFF\xFF\xFFI'):
+                    cp_m = re.search(rb'cp(\d+)', data)
+                    mp_m = re.search(rb'mp(\d+)', data)
+                    qp_m = re.search(rb'qp(\d+)', data)
+
+                    cp = int(cp_m.group(1)) if cp_m else -1
+                    mp = int(mp_m.group(1)) if mp_m else -1
+                    qp = int(qp_m.group(1)) if qp_m else 0
+
+                    if cp == -1 or mp == -1:
+                        data_slice = data[5:]
+                        protocol = data_slice[0]
+                        data_slice = data_slice[1:]
+                        name_end = data_slice.find(b'\x00')
+                        data_slice = data_slice[name_end+1:]
+                        data_slice = data_slice[data_slice.find(b'\x00')+1:]
+                        data_slice = data_slice[data_slice.find(b'\x00')+1:]
+                        data_slice = data_slice[data_slice.find(b'\x00')+1:]
+                        import struct
+                        app_id, cp, mp, bots = struct.unpack('<HBBb', data_slice[:5])
+
+                    players_text = f"{cp}/{mp} PLAYERS"
+                    if qp > 0:
+                        players_text += f" (+{qp} EN COLA)"
+                    a2s_data = {"players_text": players_text}
+            except Exception: pass
+            finally: sock.close()
+
+            is_online = False
+            ms = None
+            try:
+                result = subprocess.run(["ping", "-n", "1", "-w", "2000", host], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                if result.returncode == 0:
+                    is_online = True
+                    out = result.stdout.decode('cp1252', errors='ignore')
+                    m = re.search(r"(?:tiempo|time)[=<]\s*(\d+)\s*ms", out, re.IGNORECASE)
+                    if m: ms = m.group(1)
+            except Exception: pass
+
+            def update_ui():
+                try:
+                    if not self.hc_status.winfo_exists(): return
+                    if a2s_data:
+                        self.hc_players.configure(text=a2s_data["players_text"])
+                    else:
+                        self.hc_players.configure(text="--/-- PLAYERS")
+                        
+                    if is_online or a2s_data:
+                        self.hc_status.configure(text=" ● ACTIVE ", text_color="#28a745")
+                        self.hc_ping.configure(text=f"Ping: {ms}ms" if ms else "Ping: <1ms")
+                    else:
+                        self.hc_status.configure(text=" ● OFFLINE ", text_color="#dc3545")
+                        self.hc_ping.configure(text="Ping: Timeout")
+                except Exception: pass
+            self.after(0, update_ui)
+        import threading
+        threading.Thread(target=do_fetch, daemon=True).start()
 
     def test_windows_password(self):
         password = self.pw_entry.get()
@@ -747,11 +832,8 @@ del "%~f0"
         self.save_settings()
 
     def _populate_active_ip(self):
-        """Pre-rellena el campo IP con el servidor activo si ya hay cola configurada."""
-        active_ip = self.get_active_ip_from_bat()
-        if active_ip:
-            self.ip_entry.delete(0, 'end')
-            self.ip_entry.insert(0, active_ip)
+        """No pre-rellenar el campo con sesiones antiguas."""
+        pass
 
     def _save_one_time_setting(self):
         self.settings["one_time_mode"] = self.one_time_var.get()
@@ -1023,7 +1105,7 @@ del "%~f0"
         self._flash_activate_button()
 
         # 1. Validación de IP de Servidor
-        raw_ip = self.ip_entry.get().strip()
+        raw_ip = self.get_current_ip_from_entry()
         ip = raw_ip
         if ip.startswith("client.connect"):
             ip = ip[14:].strip()
@@ -1121,7 +1203,7 @@ del "%~f0"
 
     def test_connection(self):
         """Prueba la conexión al servidor usando subprocess (D3)."""
-        raw_ip = self.ip_entry.get().strip()
+        raw_ip = self.get_current_ip_from_entry()
         ip = raw_ip
         if ip.startswith("client.connect"):
             ip = ip[14:].strip()
@@ -1160,35 +1242,64 @@ del "%~f0"
         lbl_title = ctk.CTkLabel(col0, text="PARÁMETROS", font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"), text_color=COLOR_RUST_RED)
         lbl_title.pack(anchor="w", pady=(0, 15))
         
-        # Section 1: Server IP
-        ip_label = ctk.CTkLabel(col0, text="IP o Dominio del Servidor:", font=self.font_label, text_color="white")
+        # Section 1: Server Selection
+        ip_label = ctk.CTkLabel(col0, text="Seleccionar Servidor:", font=self.font_label, text_color="white")
         ip_label.pack(anchor="w", pady=(5, 2))
         
-        ip_frame = ctk.CTkFrame(col0, fg_color="transparent")
-        ip_frame.pack(fill="x", pady=(0, 10))
+        self.ip_frame = ctk.CTkFrame(col0, fg_color="transparent")
+        self.ip_frame.pack(fill="x", pady=(0, 10))
         
-        self.ip_entry = ctk.CTkEntry(
-            ip_frame,
-            placeholder_text="jugar.rustserver.com:28015",
-            height=36,
-            font=self.font_text,
-            fg_color="#1a1a1c",
-            border_color="#333335"
+        server_aliases = list(self.servers_data.keys())
+        if not server_aliases:
+            server_aliases = [""]
+            
+        self.ip_entry = ctk.CTkComboBox(
+            self.ip_frame,
+            values=server_aliases,
+            state="readonly",
+            height=40,
+            font=ctk.CTkFont(size=14),
+            fg_color="#101012",
+            border_color="#333335",
+            button_color="#2b2b2b",
+            button_hover_color="#3b3b3b",
+            dropdown_fg_color="#18181a",
+            dropdown_hover_color="#2b2b2f",
+            dropdown_text_color="#ffffff",
+            command=self.on_home_server_selected
         )
-        self.ip_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        self.ip_entry.pack(fill="x", expand=True)
         
-        btn_save_ip = ctk.CTkButton(
-            ip_frame,
-            text="Guardar",
-            width=75,
-            height=36,
-            fg_color="#2b2b2b",
-            hover_color="#3b3b3b",
-            font=self.font_label,
-            command=self.save_current_ip
-        )
-        btn_save_ip.pack(side="right")
-        Tooltip(btn_save_ip, "Guardar esta IP con un alias personalizado")
+        # Permitir abrir el desplegable haciendo clic en cualquier parte del campo de texto
+        def toggle_dropdown(event):
+            if hasattr(self.ip_entry, "_dropdown_menu") and self.ip_entry._dropdown_menu.winfo_ismapped():
+                self.ip_entry._dropdown_menu._withdraw()
+            else:
+                self.ip_entry._open_dropdown_menu()
+                
+        if hasattr(self.ip_entry, "_entry"):
+            self.ip_entry._entry.bind("<Button-1>", toggle_dropdown)
+        self.ip_entry.set("Selecciona un servidor...")
+
+        self.home_card = ctk.CTkFrame(col0, fg_color="#18181a", border_width=1, border_color="#2b2b2f", corner_radius=8)
+        
+        self.hc_title = ctk.CTkLabel(self.home_card, text="Esperando selección...", font=self.font_label, text_color="#aaaaaa", anchor="w")
+        self.hc_title.pack(fill="x", padx=10, pady=(8, 2))
+        
+        hc_stats = ctk.CTkFrame(self.home_card, fg_color="transparent")
+        hc_stats.pack(fill="x", padx=10, pady=(2, 2))
+        
+        self.hc_status = ctk.CTkLabel(hc_stats, text=" ● ", font=ctk.CTkFont(size=10, weight="bold"), text_color="#555")
+        self.hc_status.pack(side="left")
+        
+        self.hc_ping = ctk.CTkLabel(hc_stats, text="Ping: --", font=ctk.CTkFont(size=11), text_color="#888")
+        self.hc_ping.pack(side="left", padx=(5, 0))
+        
+        hc_players_frame = ctk.CTkFrame(self.home_card, fg_color="transparent")
+        hc_players_frame.pack(fill="x", padx=10, pady=(0, 8))
+        
+        self.hc_players = ctk.CTkLabel(hc_players_frame, text="--/-- PLAYERS", font=ctk.CTkFont(size=11, weight="bold"), text_color="#ccc")
+        self.hc_players.pack(side="left", padx=(5, 0))
         
         # Section 2: Delay Slider
         delay_lbl = ctk.CTkLabel(col0, text="Retraso de Inicio (segundos):", font=self.font_label, text_color="white")
@@ -1421,6 +1532,9 @@ del "%~f0"
         btn_add = ctk.CTkButton(form_frame, text="Añadir", font=self.font_label, fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER, height=32, command=self.add_new_server_inline)
         btn_add.grid(row=1, column=2, sticky="e", padx=(5, 12), pady=(0, 12))
         
+        btn_explore = ctk.CTkButton(form_frame, text="🔍 Explorar Servidores Destacados", font=self.font_label, fg_color="#2b2b2b", hover_color="#3b3b3b", border_width=1, border_color="#444", height=32, command=self.open_featured_servers_modal)
+        btn_explore.grid(row=2, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 12))
+        
         form_frame.grid_columnconfigure(0, weight=1)
         form_frame.grid_columnconfigure(1, weight=1)
         
@@ -1474,6 +1588,51 @@ del "%~f0"
         self.refresh_server_list(self.pages["servers"])
         styled_showinfo(self, "Servidor Añadido", f"¡El servidor '{alias}' ha sido añadido correctamente!")
 
+    def open_featured_servers_modal(self):
+        modal = tk.Toplevel(self)
+        modal.title("Servidores Destacados")
+        modal.geometry("600x500")
+        modal.configure(bg="#121212")
+        modal.transient(self)
+        modal.grab_set()
+
+        # Center the modal
+        self.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - 600) // 2
+        y = self.winfo_y() + (self.winfo_height() - 500) // 2
+        modal.geometry(f"+{x}+{y}")
+
+        title_lbl = ctk.CTkLabel(modal, text="🏆 SERVIDORES DESTACADOS", font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold"), text_color=COLOR_RUST_RED)
+        title_lbl.pack(pady=(20, 10))
+
+        subtitle_lbl = ctk.CTkLabel(modal, text="Selección Gourmet de las mejores redes de Rust. Añádelos con un solo clic.", font=self.font_text, text_color="#aaaaaa")
+        subtitle_lbl.pack(pady=(0, 20))
+
+        scroll = ctk.CTkScrollableFrame(modal, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+
+        def add_featured(srv_alias, srv_ip):
+            if srv_alias in self.servers_data:
+                styled_showinfo(modal, "Aviso", "¡Este servidor ya está en tu lista!")
+                return
+            self.servers_data[srv_alias] = {"ip": srv_ip, "fav": False}
+            self.save_servers()
+            self.refresh_server_list(self.pages.get("servers", self))
+            styled_showinfo(modal, "Añadido", f"¡{srv_alias} añadido con éxito!")
+
+        for srv in FEATURED_SERVERS:
+            row_frame = ctk.CTkFrame(scroll, fg_color="#1a1a1c", border_width=1, border_color="#2b2b2f", corner_radius=8)
+            row_frame.pack(fill="x", pady=5)
+            
+            info_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
+            info_frame.pack(side="left", padx=15, pady=10, fill="x", expand=True)
+            
+            ctk.CTkLabel(info_frame, text=srv["alias"], font=ctk.CTkFont(size=15, weight="bold"), text_color="white", anchor="w").pack(fill="x")
+            ctk.CTkLabel(info_frame, text=srv["desc"], font=ctk.CTkFont(size=12), text_color="#aaaaaa", anchor="w").pack(fill="x")
+            
+            btn = ctk.CTkButton(row_frame, text="+ Añadir", width=80, height=30, fg_color="#28a745", hover_color="#218838", font=ctk.CTkFont(weight="bold"), command=lambda a=srv["alias"], i=srv["ip"]: add_featured(a, i))
+            btn.pack(side="right", padx=15)
+
     def refresh_server_list(self, w):
         for widget in self.scroll_servers.winfo_children():
             widget.destroy()
@@ -1510,7 +1669,8 @@ del "%~f0"
             avatar = ctk.CTkFrame(top_frame, width=50, height=50, corner_radius=10, fg_color="#101012", border_width=1, border_color="#2b2b2f")
             avatar.pack(side="left")
             avatar.pack_propagate(False)
-            ctk.CTkLabel(avatar, text=alias[:2].upper(), font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold"), text_color=COLOR_RUST_RED).pack(expand=True)
+            lbl_avatar = ctk.CTkLabel(avatar, text=alias[:2].upper(), font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold"), text_color=COLOR_RUST_RED)
+            lbl_avatar.pack(expand=True)
             
             # Titles
             titles_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
@@ -1545,6 +1705,9 @@ del "%~f0"
             lbl_ping = ctk.CTkLabel(mid_frame, text="Ping: --", font=ctk.CTkFont(size=11, weight="bold"), text_color="#888")
             lbl_ping.pack(side="left", padx=10)
             
+            lbl_wipe = ctk.CTkLabel(mid_frame, text="", font=ctk.CTkFont(size=11), text_color="#aaaaaa")
+            lbl_wipe.pack(side="left", padx=(0, 10))
+            
             lbl_players = ctk.CTkLabel(mid_frame, text="--/-- PLAYERS", font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"), text_color="#dddddd")
             lbl_players.pack(side="right")
             
@@ -1552,15 +1715,15 @@ del "%~f0"
             action_frame = ctk.CTkFrame(card, fg_color="transparent")
             action_frame.pack(fill="x", padx=15, pady=(10, 5))
             
-            def select_cmd(target_ip=ip, window=w):
-                self.ip_entry.delete(0, 'end')
-                self.ip_entry.insert(0, target_ip)
+            def select_cmd(target_ip=ip, target_alias=alias, window=w):
+                self.ip_entry.set(target_alias)
+                self.on_home_server_selected()
                 if window and not isinstance(window, (ctk.CTkFrame, tk.Frame)):
                     window.destroy()
                 else:
                     self.switch_page("home")
             
-            btn_join = ctk.CTkButton(action_frame, text="JOIN SERVER" if not is_active else "SERVER ACTIVE (AUTO-QUEUE SET)", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"), height=42, fg_color=COLOR_RUST_RED if not is_active else "#28a745", hover_color=COLOR_RUST_HOVER if not is_active else "#218838", command=select_cmd)
+            btn_join = ctk.CTkButton(action_frame, text="SELECCIONAR SERVIDOR" if not is_active else "SERVIDOR ACTIVO", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"), height=42, fg_color=COLOR_RUST_RED if not is_active else "#28a745", hover_color=COLOR_RUST_HOVER if not is_active else "#218838", command=select_cmd)
             btn_join.pack(fill="x")
             
             # --- BOTTOM SECTION (Copy IP, Delete, Edit, Ping) ---
@@ -1602,9 +1765,9 @@ del "%~f0"
             btn_edit.pack(side="right", padx=5)
 
             # Launch async data fetcher
-            self._fetch_server_data_async(ip, lbl_subtitle, status_badge, lbl_players, lbl_ping)
+            self._fetch_server_data_async(ip, lbl_subtitle, status_badge, lbl_players, lbl_ping, lbl_wipe, lbl_avatar)
 
-    def _fetch_server_data_async(self, ip, lbl_subtitle, status_badge, lbl_players, lbl_ping):
+    def _fetch_server_data_async(self, ip, lbl_subtitle, status_badge, lbl_players, lbl_ping, lbl_wipe, lbl_avatar):
         """Query A2S for players/name and ping for latency in a background thread."""
         def do_fetch():
             import socket, re
@@ -1670,16 +1833,99 @@ del "%~f0"
             except Exception:
                 pass
 
+            # Battlemetrics Wipe Info
+            wipe_info = ""
+            try:
+                import urllib.request, json
+                from datetime import datetime, timezone
+                bm_ip = socket.gethostbyname(host)
+                url = f"https://api.battlemetrics.com/servers?filter[search]={bm_ip}"
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                res = urllib.request.urlopen(req, timeout=2.0)
+                bm_data = json.loads(res.read())
+                
+                pil_image = None
+                if bm_data.get('data'):
+                    wipe_str = None
+                    for srv in bm_data['data']:
+                        attrs = srv.get('attributes', {})
+                        if attrs.get('ip') == bm_ip and attrs.get('status') == 'online':
+                            wipe_str = attrs.get('details', {}).get('rust_last_wipe')
+                            bm_full_name = attrs.get('name')
+                            img_url = attrs.get('details', {}).get('rust_headerimage')
+                            if bm_full_name and a2s_data:
+                                a2s_data["name"] = bm_full_name
+                            
+                            if img_url:
+                                try:
+                                    import io
+                                    req_img = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0'})
+                                    res_img = urllib.request.urlopen(req_img, timeout=2.0)
+                                    raw_data = res_img.read()
+                                    from PIL import Image
+                                    img = Image.open(io.BytesIO(raw_data))
+                                    w, h = img.size
+                                    min_dim = min(w, h)
+                                    left = (w - min_dim) / 2
+                                    top = (h - min_dim) / 2
+                                    right = (w + min_dim) / 2
+                                    bottom = (h + min_dim) / 2
+                                    # Crop to square, resize to 50x50
+                                    pil_image = img.crop((left, top, right, bottom)).resize((50, 50), Image.Resampling.LANCZOS)
+                                    
+                                    # Create a solid background matching the CARD fg_color (#18181A)
+                                    bg = Image.new('RGBA', (50, 50), (24, 24, 26, 255))
+                                    
+                                    # Create mask for rounded corners
+                                    from PIL import ImageDraw
+                                    mask = Image.new("L", (50, 50), 0)
+                                    draw = ImageDraw.Draw(mask)
+                                    # Use exactly 0 to 49 for 50x50 image
+                                    draw.rounded_rectangle((0, 0, 49, 49), radius=10, fill=255)
+                                    
+                                    # Paste the image onto the solid background using the mask
+                                    pil_image = pil_image.convert("RGBA")
+                                    bg.paste(pil_image, (0, 0), mask)
+                                    pil_image = bg
+                                except Exception: pass
+                                
+                            if wipe_str: break
+                        
+                    if wipe_str:
+                        wipe_dt = datetime.strptime(wipe_str, '%Y-%m-%dT%H:%M:%S.%fZ').replace(tzinfo=timezone.utc)
+                        now = datetime.now(timezone.utc)
+                        diff = now - wipe_dt
+                        hours = diff.total_seconds() / 3600
+                        if hours < 24:
+                            wipe_info = f"Wiped {int(hours)} hrs ago"
+                        else:
+                            days = round(hours / 24)
+                            wipe_info = f"Wiped {days} days ago"
+            except Exception:
+                pass
+
             def update_ui():
                 try:
                     if not status_badge.winfo_exists(): return
                     
                     if a2s_data:
-                        lbl_subtitle.configure(text=a2s_data["name"][:75] + ("..." if len(a2s_data["name"]) > 75 else ""))
+                        base_text = a2s_data["name"][:150] + ("..." if len(a2s_data["name"]) > 150 else "")
+                        # Easter egg fix for the 63-byte limit cutting "Wipes" to "Wip"
+                        if base_text.endswith(" No BP Wip"):
+                            base_text += "es"
+                        elif base_text.endswith("Wip"):
+                            base_text += "es"
+                            
+                        lbl_subtitle.configure(text=base_text)
                         lbl_players.configure(text=a2s_data["players_text"])
+                        if wipe_info:
+                            lbl_wipe.configure(text=f"•   {wipe_info}")
+                        else:
+                            lbl_wipe.configure(text="")
                     else:
                         lbl_subtitle.configure(text="Rust Server (A2S Unreachable)")
                         lbl_players.configure(text="--/-- PLAYERS")
+                        lbl_wipe.configure(text="")
                         
                     if is_online or a2s_data:
                         status_badge.configure(text=" ACTIVE ● ", fg_color="#28a745", text_color="white")
@@ -1687,6 +1933,13 @@ del "%~f0"
                     else:
                         status_badge.configure(text=" OFFLINE ", fg_color="#dc3545", text_color="white")
                         lbl_ping.configure(text="Ping: Timeout")
+                        
+                    if pil_image:
+                        import customtkinter as ctk
+                        ctk_img = ctk.CTkImage(light_image=pil_image, dark_image=pil_image, size=(50, 50))
+                        lbl_avatar.configure(image=ctk_img, text="")
+                        lbl_avatar.master.configure(border_width=0)
+                        
                 except Exception:
                     pass
 
@@ -1972,6 +2225,14 @@ del "%~f0"
             activate_scrollbars=True
         )
         self.log_textbox.grid(row=1, column=0, sticky="nsew", padx=20, pady=5)
+        
+        # Configure color tags
+        self.log_textbox.tag_config("time", foreground="#555555")
+        self.log_textbox.tag_config("info", foreground="#ffffff")
+        self.log_textbox.tag_config("warning", foreground="#ffcc00")
+        self.log_textbox.tag_config("error", foreground="#ff4444")
+        self.log_textbox.tag_config("success", foreground="#28a745")
+        
         self.log_textbox.configure(state="disabled")
         
         # Footer buttons
@@ -1990,6 +2251,33 @@ del "%~f0"
         )
         btn_refresh.pack(side="left", padx=(0, 10))
         
+        btn_copy = ctk.CTkButton(
+            footer,
+            text="Copiar Logs",
+            width=100,
+            height=32,
+            fg_color="#2b2b2b",
+            hover_color="#3b3b3b",
+            font=self.font_label,
+            command=lambda: self.clipboard_clear() or self.clipboard_append(self.log_textbox.get("1.0", "end-1c")) if hasattr(self, "log_textbox") else None
+        )
+        btn_copy.pack(side="left", padx=(0, 10))
+        
+        import os
+        btn_open = ctk.CTkButton(
+            footer,
+            text="Abrir en Bloc de Notas",
+            width=160,
+            height=32,
+            fg_color="#1a2b3a",
+            border_width=1,
+            border_color="#2b4c6b",
+            hover_color="#203a50",
+            font=self.font_label,
+            command=lambda: os.startfile(LOG_FILE) if os.path.exists(LOG_FILE) else None
+        )
+        btn_open.pack(side="left", padx=(0, 10))
+        
         btn_clear = ctk.CTkButton(
             footer,
             text="Borrar Historial",
@@ -2006,6 +2294,20 @@ del "%~f0"
         btn_clear.pack(side="left")
         
         self.refresh_log_viewer()
+        self.auto_refresh_logs()
+        
+    def auto_refresh_logs(self):
+        if hasattr(self, 'pages') and self.pages.get("logs") and self.pages["logs"].winfo_exists():
+            try:
+                import os
+                if os.path.exists(LOG_FILE):
+                    current_size = os.path.getsize(LOG_FILE)
+                    if not hasattr(self, 'last_log_size') or self.last_log_size != current_size:
+                        self.last_log_size = current_size
+                        self.refresh_log_viewer()
+            except Exception:
+                pass
+            self.after(2000, self.auto_refresh_logs)
 
     def refresh_log_viewer(self):
         if not hasattr(self, 'log_textbox') or not self.log_textbox.winfo_exists():
@@ -2014,16 +2316,41 @@ del "%~f0"
         self.log_textbox.configure(state="normal")
         self.log_textbox.delete("1.0", "end")
         
+        import os
         if os.path.exists(LOG_FILE):
             try:
                 with open(LOG_FILE, "r", encoding="utf-8") as f:
                     lines = f.readlines()
-                tail_lines = lines[-150:]
-                self.log_textbox.insert("1.0", "".join(tail_lines))
+                tail_lines = lines[-200:]
+                
+                for line in tail_lines:
+                    parts = line.split(" - ", 2)
+                    if len(parts) >= 3:
+                        time_part = parts[0] + " - "
+                        level_part = parts[1]
+                        msg_part = " - " + parts[2]
+                        
+                        self.log_textbox.insert("end", time_part, "time")
+                        
+                        if "ERROR" in level_part or "CRITICAL" in level_part:
+                            self.log_textbox.insert("end", level_part, "error")
+                            self.log_textbox.insert("end", msg_part, "error")
+                        elif "WARNING" in level_part:
+                            self.log_textbox.insert("end", level_part, "warning")
+                            self.log_textbox.insert("end", msg_part, "warning")
+                        elif "SUCCESS" in level_part or "EXITO" in msg_part.upper() or "EXITOSAMENTE" in msg_part.upper():
+                            self.log_textbox.insert("end", level_part, "success")
+                            self.log_textbox.insert("end", msg_part, "success")
+                        else:
+                            self.log_textbox.insert("end", level_part, "info")
+                            self.log_textbox.insert("end", msg_part, "info")
+                    else:
+                        self.log_textbox.insert("end", line, "info")
+                        
             except Exception as e:
-                self.log_textbox.insert("1.0", f"Error al leer el archivo de registros: {e}")
+                self.log_textbox.insert("1.0", f"Error al leer el archivo de registros: {e}", "error")
         else:
-            self.log_textbox.insert("1.0", "No hay registros de actividad todavía.")
+            self.log_textbox.insert("1.0", "No hay registros de actividad todavía.", "time")
             
         self.log_textbox.configure(state="disabled")
         self.log_textbox.see("end")
