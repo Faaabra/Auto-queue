@@ -105,12 +105,13 @@ class StyledDialog(ctk.CTkToplevel):
     Diálogo modal personalizado con estilo oscuro premium.
     Tipos soportados: 'info', 'warning', 'error', 'confirm', 'input'
     """
-    ICONS = {
-        "info":    ("ℹ️", "#4db8ff"),
-        "warning": ("⚠️", "#ffcc00"),
-        "error":   ("❌", "#dc3545"),
-        "confirm": ("❓", "#ffcc00"),
-        "input":   ("✏️", "#4db8ff"),
+    # Color del acento lateral por tipo
+    ACCENT_COLORS = {
+        "info":    COLOR_RUST_RED,
+        "warning": "#d4a853",
+        "error":   "#dc3545",
+        "confirm": "#d4a853",
+        "input":   COLOR_RUST_RED,
     }
 
     def __init__(self, parent, title, message, dialog_type="info", **kwargs):
@@ -126,41 +127,55 @@ class StyledDialog(ctk.CTkToplevel):
         self.transient(parent)
         self.grab_set()
 
-        # Set rust icon (CTkToplevel needs a delay to apply iconbitmap)
+        # CustomTkinter overrides the icon at ~200ms internally.
+        # To avoid the user seeing a "blink" or the blue default icon, we hide the window briefly.
+        self.withdraw()
+        
         try:
             import sys as _sys
             _icon = os.path.join(_sys._MEIPASS, 'rust.ico') if hasattr(_sys, '_MEIPASS') else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rust.ico')
             if os.path.exists(_icon):
-                self.after(50, lambda: self.iconbitmap(_icon))
+                try: self.iconbitmap(_icon)
+                except: pass
+                
+                def _apply_icon_and_show():
+                    try: self.iconbitmap(_icon)
+                    except: pass
+                    self.deiconify()
+                
+                self.after(250, _apply_icon_and_show)
+            else:
+                self.after(10, self.deiconify)
         except Exception:
-            pass
+            self.after(10, self.deiconify)
 
         # --- Dimensions ---
         w = kwargs.get("width", 420)
-        h = kwargs.get("height", 240 if dialog_type != "input" else 270)
+        h = kwargs.get("height", 220 if dialog_type != "input" else 260)
         sw = parent.winfo_screenwidth()
         sh = parent.winfo_screenheight()
         x = int((sw / 2) - (w / 2))
         y = int((sh / 2) - (h / 2))
         self.geometry(f"{w}x{h}+{x}+{y}")
 
-        icon_emoji, icon_color = self.ICONS.get(dialog_type, self.ICONS["info"])
+        accent = self.ACCENT_COLORS.get(dialog_type, COLOR_RUST_RED)
 
         # --- Content container ---
         container = ctk.CTkFrame(self, fg_color="transparent")
-        container.pack(fill="both", expand=True, padx=30, pady=(25, 20))
+        container.pack(fill="both", expand=True, padx=28, pady=(22, 18))
 
-        # Header row (icon + title)
+        # Accent bar + Title
         header_frame = ctk.CTkFrame(container, fg_color="transparent")
-        header_frame.pack(fill="x", pady=(0, 12))
+        header_frame.pack(fill="x", pady=(0, 10))
 
-        icon_lbl = ctk.CTkLabel(header_frame, text=icon_emoji, font=ctk.CTkFont(size=22))
-        icon_lbl.pack(side="left", padx=(0, 10))
+        # Small colored accent bar
+        accent_bar = ctk.CTkFrame(header_frame, fg_color=accent, width=4, height=22, corner_radius=2)
+        accent_bar.pack(side="left", padx=(0, 12))
 
         title_lbl = ctk.CTkLabel(
             header_frame, text=title,
-            font=ctk.CTkFont(family="Segoe UI", size=17, weight="bold"),
-            text_color=icon_color, anchor="w"
+            font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"),
+            text_color="white", anchor="w"
         )
         title_lbl.pack(side="left", fill="x", expand=True)
 
@@ -232,16 +247,16 @@ class StyledDialog(ctk.CTkToplevel):
         else:
             # Single "Entendido" button for info/warning/error
             btn_color = {
-                "info": "#2a5a8a",
-                "warning": "#8a7a2a",
+                "info": "#333335",
+                "warning": "#5a4a1a",
                 "error": COLOR_RUST_RED
-            }.get(dialog_type, "#2a5a8a")
+            }.get(dialog_type, "#333335")
 
             btn_hover = {
-                "info": "#356ea3",
-                "warning": "#a39030",
+                "info": "#444446",
+                "warning": "#6b5a22",
                 "error": COLOR_RUST_HOVER
-            }.get(dialog_type, "#356ea3")
+            }.get(dialog_type, "#444446")
 
             btn_ok = ctk.CTkButton(
                 btn_frame, text="Entendido", width=140, height=38,
@@ -477,11 +492,16 @@ class App(ctk.CTk):
         w.transient(self)
         w.grab_set() # Foco obligatorio
 
-        # Set icon with delay (required for CTkToplevel)
+        # Set icon with multiple delays to override CTkToplevel's reset
         try:
             _icon = os.path.join(sys._MEIPASS, 'rust.ico') if hasattr(sys, '_MEIPASS') else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rust.ico')
             if os.path.exists(_icon):
-                w.after(50, lambda: w.iconbitmap(_icon))
+                def _apply():
+                    try: w.iconbitmap(_icon)
+                    except: pass
+                w.after(50, _apply)
+                w.after(250, _apply)
+                w.after(500, _apply)
         except Exception:
             pass
         
@@ -584,7 +604,13 @@ del "%~f0"
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    for k, v in data.items():
+                        if isinstance(v, str):
+                            data[k] = {"ip": v, "fav": False}
+                        elif isinstance(v, dict) and "fav" not in v:
+                            data[k]["fav"] = False
+                    return data
             except Exception as e:
                 logger.warning("Error cargando servidores: %s", e)
         return {}
@@ -671,8 +697,8 @@ del "%~f0"
             return
             
         alias = styled_input(self, "Guardar IP", "Introduce un nombre (Alias) para tu servidor:", placeholder="Ej: Rustafied EU")
-        if alias:
-            self.servers_data[alias] = ip
+        if alias not in self.servers_data:
+            self.servers_data[alias] = {"ip": ip, "fav": False}
             self.save_servers()
             styled_showinfo(self, "Guardado", f"¡'{alias}' guardado en tus servidores!")
 
@@ -1263,17 +1289,20 @@ del "%~f0"
         self.status_frame.pack(fill="x", pady=(0, 15))
         self.status_frame.pack_propagate(False)
         
-        self.status_dot = ctk.CTkLabel(self.status_frame, text="●", font=ctk.CTkFont(size=18), text_color=COLOR_INACTIVE)
-        self.status_dot.pack(side="left", padx=(15, 5))
-        
         status_inner = ctk.CTkFrame(self.status_frame, fg_color="transparent")
-        status_inner.pack(side="left", fill="both", expand=True, pady=10)
+        status_inner.pack(side="left", fill="both", expand=True, padx=15, pady=12)
         
-        self.status_label = ctk.CTkLabel(status_inner, text="○  INACTIVO  ○", font=self.font_subtitle, text_color=COLOR_INACTIVE, anchor="w")
-        self.status_label.pack(fill="x", anchor="w")
+        status_title_frame = ctk.CTkFrame(status_inner, fg_color="transparent")
+        status_title_frame.pack(fill="x", anchor="w")
+        
+        self.status_dot = ctk.CTkLabel(status_title_frame, text="●", font=ctk.CTkFont(size=18), text_color=COLOR_INACTIVE, width=24)
+        self.status_dot.pack(side="left", padx=(0, 8))
+        
+        self.status_label = ctk.CTkLabel(status_title_frame, text="INACTIVO", font=self.font_subtitle, text_color=COLOR_INACTIVE, anchor="w")
+        self.status_label.pack(side="left")
         
         self.status_wake_label = ctk.CTkLabel(status_inner, text="Sin despertador configurado", font=self.font_small, text_color="#555555", anchor="w")
-        self.status_wake_label.pack(fill="x", anchor="w")
+        self.status_wake_label.pack(fill="x", anchor="w", padx=(22, 0))
         
         # Windows password
         pw_label = ctk.CTkLabel(col1, text="Contraseña de Windows (AutoLogon):", font=self.font_label, text_color="white")
@@ -1374,6 +1403,9 @@ del "%~f0"
         lbl_title = ctk.CTkLabel(header, text="MIS SERVIDORES", font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"), text_color=COLOR_RUST_RED)
         lbl_title.pack(side="left")
         
+        btn_refresh = ctk.CTkButton(header, text="↻ Refresh", width=70, height=28, fg_color="transparent", border_width=1, border_color="#333", hover_color="#222", font=ctk.CTkFont(size=12, weight="bold"), command=lambda: self.refresh_server_list(servers_page))
+        btn_refresh.pack(side="right")
+        
         # Add server inline frame (form)
         form_frame = ctk.CTkFrame(servers_page, fg_color="#18181b", border_width=1, border_color="#2b2b2f", corner_radius=8)
         form_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=5)
@@ -1433,7 +1465,7 @@ del "%~f0"
                 f"La dirección '{ip}' no parece válida.\nDebe ser una IP o dominio (con o sin puerto).\nEjemplos:\n- 192.168.1.100:28015\n- jugar.rustserver.com:28015")
             return
             
-        self.servers_data[alias] = ip
+        self.servers_data[alias] = {"ip": ip, "fav": False}
         self.save_servers()
         
         self.new_alias_entry.delete(0, 'end')
@@ -1458,39 +1490,68 @@ del "%~f0"
 
         active_ip = self.get_active_ip_from_bat()
 
-        for alias, ip in self.servers_data.items():
+        # Sort servers: Favorites first
+        sorted_servers = sorted(self.servers_data.items(), key=lambda x: (not (x[1].get("fav", False) if isinstance(x[1], dict) else False), x[0].lower()))
+
+        for alias, data in sorted_servers:
+            ip = data["ip"] if isinstance(data, dict) else data
+            is_fav = data.get("fav", False) if isinstance(data, dict) else False
             is_active = (ip == active_ip)
-            row_bg = "#1e2e1e" if is_active else "#1c1c1f"
-            row = ctk.CTkFrame(self.scroll_servers, fg_color=row_bg, corner_radius=8, height=60)
-            row.pack(fill="x", pady=4, padx=5)
             
-            info_frame = ctk.CTkFrame(row, fg_color="transparent")
-            info_frame.pack(side="left", fill="both", expand=True, padx=12, pady=8)
+            # Main Card
+            card = ctk.CTkFrame(self.scroll_servers, fg_color="#18181A", border_width=1, border_color="#2b2b2f", corner_radius=12)
+            card.pack(fill="x", pady=8, padx=10)
+            
+            # --- TOP SECTION (Avatar + Title + Favorite) ---
+            top_frame = ctk.CTkFrame(card, fg_color="transparent")
+            top_frame.pack(fill="x", padx=15, pady=(15, 10))
+            
+            # Avatar
+            avatar = ctk.CTkFrame(top_frame, width=50, height=50, corner_radius=10, fg_color="#101012", border_width=1, border_color="#2b2b2f")
+            avatar.pack(side="left")
+            avatar.pack_propagate(False)
+            ctk.CTkLabel(avatar, text=alias[:2].upper(), font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold"), text_color=COLOR_RUST_RED).pack(expand=True)
+            
+            # Titles
+            titles_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
+            titles_frame.pack(side="left", padx=15, fill="x", expand=True)
+            
+            lbl_alias = ctk.CTkLabel(titles_frame, text=alias.upper(), font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"), text_color="white", anchor="w")
+            lbl_alias.pack(fill="x")
+            
+            lbl_subtitle = ctk.CTkLabel(titles_frame, text="Consultando servidor...", font=self.font_small, text_color="#aaaaaa", anchor="w")
+            lbl_subtitle.pack(fill="x")
+            
+            # Favorite Star
+            def toggle_fav_cmd(target_alias=alias):
+                if isinstance(self.servers_data[target_alias], str):
+                    self.servers_data[target_alias] = {"ip": self.servers_data[target_alias], "fav": True}
+                else:
+                    self.servers_data[target_alias]["fav"] = not self.servers_data[target_alias].get("fav", False)
+                self.save_servers()
+                self.refresh_server_list(w)
 
-            alias_header = ctk.CTkFrame(info_frame, fg_color="transparent")
-            alias_header.pack(fill="x", anchor="w")
-            lbl_alias = ctk.CTkLabel(alias_header, text=alias, font=self.font_subtitle, text_color="white", anchor="w")
-            lbl_alias.pack(side="left")
-            if is_active:
-                ctk.CTkLabel(alias_header, text=" ACTIVO", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-                             text_color="#28a745").pack(side="left", padx=(6, 0))
-
-            # IP + Status row
-            ip_status_frame = ctk.CTkFrame(info_frame, fg_color="transparent")
-            ip_status_frame.pack(fill="x", anchor="w")
-
-            lbl_ip = ctk.CTkLabel(ip_status_frame, text=ip, font=self.font_small, text_color="#aaaaaa", anchor="w")
-            lbl_ip.pack(side="left")
-
-            # Status indicator (dot + text)
-            status_dot = ctk.CTkLabel(ip_status_frame, text="●", font=ctk.CTkFont(size=10), text_color="#888888", width=14)
-            status_dot.pack(side="left", padx=(10, 2))
-            status_label = ctk.CTkLabel(ip_status_frame, text="Comprobando...", font=ctk.CTkFont(family="Segoe UI", size=10), text_color="#888888")
-            status_label.pack(side="left")
-
-            # Launch async ping
-            self._ping_server_status(ip, status_dot, status_label)
-
+            star_color = COLOR_YELLOW if is_fav else "#444444"
+            btn_fav = ctk.CTkButton(top_frame, text="★", width=40, height=40, font=ctk.CTkFont(size=24), fg_color="transparent", hover_color="#2b2b2f", text_color=star_color, command=toggle_fav_cmd)
+            btn_fav.pack(side="right")
+            
+            # --- MIDDLE SECTION (Active + Players) ---
+            mid_frame = ctk.CTkFrame(card, fg_color="transparent")
+            mid_frame.pack(fill="x", padx=15, pady=5)
+            
+            status_badge = ctk.CTkLabel(mid_frame, text=" COMPROBANDO ", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), fg_color="#333333", text_color="#aaaaaa", corner_radius=6, height=26, width=90)
+            status_badge.pack(side="left")
+            
+            lbl_ping = ctk.CTkLabel(mid_frame, text="Ping: --", font=ctk.CTkFont(size=11, weight="bold"), text_color="#888")
+            lbl_ping.pack(side="left", padx=10)
+            
+            lbl_players = ctk.CTkLabel(mid_frame, text="--/-- PLAYERS", font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"), text_color="#dddddd")
+            lbl_players.pack(side="right")
+            
+            # --- ACTION SECTION (Join Server) ---
+            action_frame = ctk.CTkFrame(card, fg_color="transparent")
+            action_frame.pack(fill="x", padx=15, pady=(10, 5))
+            
             def select_cmd(target_ip=ip, window=w):
                 self.ip_entry.delete(0, 'end')
                 self.ip_entry.insert(0, target_ip)
@@ -1498,12 +1559,19 @@ del "%~f0"
                     window.destroy()
                 else:
                     self.switch_page("home")
-
+            
+            btn_join = ctk.CTkButton(action_frame, text="JOIN SERVER" if not is_active else "SERVER ACTIVE (AUTO-QUEUE SET)", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"), height=42, fg_color=COLOR_RUST_RED if not is_active else "#28a745", hover_color=COLOR_RUST_HOVER if not is_active else "#218838", command=select_cmd)
+            btn_join.pack(fill="x")
+            
+            # --- BOTTOM SECTION (Copy IP, Delete, Edit, Ping) ---
+            bottom_frame = ctk.CTkFrame(card, fg_color="transparent")
+            bottom_frame.pack(fill="x", padx=15, pady=(5, 15))
+            
             def copy_cmd(target_ip=ip):
                 self.clipboard_clear()
                 self.clipboard_append(target_ip)
                 styled_showinfo(self, "Copiado", f"IP '{target_ip}' copiada al portapapeles.")
-
+            
             def edit_cmd(target_alias=alias, window=w):
                 self._edit_server_alias(target_alias, window)
 
@@ -1512,57 +1580,119 @@ del "%~f0"
                     del self.servers_data[target_alias]
                     self.save_servers()
                     self.refresh_server_list(window)
+                    
+            btn_copy = ctk.CTkButton(bottom_frame, text="COPY IP", font=ctk.CTkFont(size=11, weight="bold"), width=80, height=28, fg_color="#101012", hover_color="#2b2b2f", border_width=1, border_color="#333", command=copy_cmd)
+            btn_copy.pack(side="left")
             
-            btn_sel = ctk.CTkButton(row, text="Usar", width=70, height=32, font=self.font_label, 
-                                    fg_color="#333335", hover_color="#444446", command=select_cmd)
-            btn_sel.pack(side="left", padx=5, pady=6)
-
-            btn_copy = ctk.CTkButton(row, text="Copiar", width=60, height=32, font=self.font_label,
-                                     fg_color="#2b2b2d", hover_color="#3b3b3f", border_width=1, border_color="#555",
-                                     command=copy_cmd)
-            btn_copy.pack(side="left", padx=(0, 2), pady=6)
-            Tooltip(btn_copy, "Copiar IP al portapapeles")
-
-            btn_edit = ctk.CTkButton(row, text="Editar", width=60, height=32, font=self.font_label,
-                                     fg_color="#2b2b2d", hover_color="#3b3b3f", border_width=1, border_color="#555",
-                                     command=edit_cmd)
-            btn_edit.pack(side="left", padx=(0, 2), pady=6)
-            Tooltip(btn_edit, "Renombrar Servidor")
+            lbl_ip = ctk.CTkLabel(bottom_frame, text=ip, font=ctk.CTkFont(size=11), text_color="#777")
+            lbl_ip.pack(side="left", padx=8)
             
-            btn_del = ctk.CTkButton(row, text="Borrar", width=60, height=32, font=self.font_label, 
-                                    fg_color="transparent", border_width=1, border_color=COLOR_RUST_RED, text_color=COLOR_RUST_RED, hover_color="#3a1e1b", command=delete_cmd)
-            btn_del.pack(side="left", padx=(0, 12), pady=6)
+            def stats_cmd(target_ip=ip):
+                import webbrowser
+                host = target_ip.split(":")[0] if ":" in target_ip else target_ip
+                webbrowser.open(f"https://www.battlemetrics.com/servers/rust?q={host}")
 
-    def _ping_server_status(self, ip, dot_label, text_label):
-        """Ping a server IP in a background thread and update the status dot/label."""
-        def do_ping():
+            btn_stats = ctk.CTkButton(bottom_frame, text="STATS", font=ctk.CTkFont(size=11, weight="bold"), width=60, height=28, fg_color="#101012", hover_color="#2b2b2f", border_width=1, border_color="#333", command=stats_cmd)
+            btn_stats.pack(side="left", padx=10)
+
+            btn_del = ctk.CTkButton(bottom_frame, text="DELETE", font=ctk.CTkFont(size=11, weight="bold"), width=60, height=28, fg_color="#101012", hover_color="#3a1e1b", text_color=COLOR_RUST_RED, border_width=1, border_color="#333", command=delete_cmd)
+            btn_del.pack(side="right")
+            
+            btn_edit = ctk.CTkButton(bottom_frame, text="EDIT", font=ctk.CTkFont(size=11, weight="bold"), width=60, height=28, fg_color="#101012", hover_color="#2b2b2f", border_width=1, border_color="#333", command=edit_cmd)
+            btn_edit.pack(side="right", padx=5)
+
+            # Launch async data fetcher
+            self._fetch_server_data_async(ip, lbl_subtitle, status_badge, lbl_players, lbl_ping)
+
+    def _fetch_server_data_async(self, ip, lbl_subtitle, status_badge, lbl_players, lbl_ping):
+        """Query A2S for players/name and ping for latency in a background thread."""
+        def do_fetch():
+            import socket, re
+            host = ip.split(":")[0] if ":" in ip else ip
+            port = int(ip.split(":")[1]) if ":" in ip else 28015
+            
+            a2s_data = None
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(2.0)
             try:
-                # Extract host (remove port if present)
-                host = ip.split(":")[0] if ":" in ip else ip
+                sock.sendto(b'\xFF\xFF\xFF\xFFTSource Engine Query\x00', (host, port))
+                data, _ = sock.recvfrom(4096)
+                if data.startswith(b'\xFF\xFF\xFF\xFFI'):
+                    data_slice = data[5:]
+                    protocol = data_slice[0]
+                    data_slice = data_slice[1:]
+                    name_end = data_slice.find(b'\x00')
+                    name = data_slice[:name_end].decode('utf-8', errors='ignore')
+                    
+                    # Extraer jugadores via regex para evitar el overflow del byte de Rust
+                    cp_m = re.search(rb'cp(\d+)', data)
+                    mp_m = re.search(rb'mp(\d+)', data)
+                    qp_m = re.search(rb'qp(\d+)', data)
+
+                    cp = int(cp_m.group(1)) if cp_m else -1
+                    mp = int(mp_m.group(1)) if mp_m else -1
+                    qp = int(qp_m.group(1)) if qp_m else 0
+
+                    if cp == -1 or mp == -1:
+                        # Fallback estandar
+                        import struct
+                        data_slice = data_slice[name_end+1:]
+                        data_slice = data_slice[data_slice.find(b'\x00')+1:]
+                        data_slice = data_slice[data_slice.find(b'\x00')+1:]
+                        data_slice = data_slice[data_slice.find(b'\x00')+1:]
+                        app_id, cp, mp, bots = struct.unpack('<HBBb', data_slice[:5])
+
+                    players_text = f"{cp}/{mp} PLAYERS"
+                    if qp > 0:
+                        players_text += f" (+{qp} EN COLA)"
+
+                    a2s_data = {"name": name, "players_text": players_text}
+            except Exception:
+                pass
+            finally:
+                sock.close()
+
+            # Now ping
+            is_online = False
+            ms = None
+            try:
                 result = subprocess.run(
                     ["ping", "-n", "1", "-w", "2000", host],
                     capture_output=True,
                     creationflags=subprocess.CREATE_NO_WINDOW
                 )
                 is_online = (result.returncode == 0)
+                if is_online:
+                    import re
+                    out = result.stdout.decode('cp1252', errors='ignore')
+                    m = re.search(r"(?:tiempo|time)[=<]\s*(\d+)\s*ms", out, re.IGNORECASE)
+                    if m: ms = m.group(1)
             except Exception:
-                is_online = False
+                pass
 
             def update_ui():
                 try:
-                    if dot_label.winfo_exists() and text_label.winfo_exists():
-                        if is_online:
-                            dot_label.configure(text_color="#28a745")
-                            text_label.configure(text="Online", text_color="#28a745")
-                        else:
-                            dot_label.configure(text_color="#dc3545")
-                            text_label.configure(text="Offline", text_color="#dc3545")
+                    if not status_badge.winfo_exists(): return
+                    
+                    if a2s_data:
+                        lbl_subtitle.configure(text=a2s_data["name"][:75] + ("..." if len(a2s_data["name"]) > 75 else ""))
+                        lbl_players.configure(text=a2s_data["players_text"])
+                    else:
+                        lbl_subtitle.configure(text="Rust Server (A2S Unreachable)")
+                        lbl_players.configure(text="--/-- PLAYERS")
+                        
+                    if is_online or a2s_data:
+                        status_badge.configure(text=" ACTIVE ● ", fg_color="#28a745", text_color="white")
+                        lbl_ping.configure(text=f"Ping: {ms}ms" if ms else "Ping: <1ms")
+                    else:
+                        status_badge.configure(text=" OFFLINE ", fg_color="#dc3545", text_color="white")
+                        lbl_ping.configure(text="Ping: Timeout")
                 except Exception:
                     pass
 
             self.after(0, update_ui)
 
-        threading.Thread(target=do_ping, daemon=True).start()
+        threading.Thread(target=do_fetch, daemon=True).start()
 
     def _edit_server_alias(self, old_alias, window):
         new_alias = styled_input(self, "Renombrar Servidor", f"Nuevo nombre para '{old_alias}':", placeholder="Nuevo alias")
@@ -1611,7 +1741,10 @@ del "%~f0"
                 count_new = 0
                 for alias, ip in imported.items():
                     if alias not in self.servers_data:
-                        self.servers_data[alias] = ip
+                        if isinstance(ip, str):
+                            self.servers_data[alias] = {"ip": ip, "fav": False}
+                        else:
+                            self.servers_data[alias] = ip
                         count_new += 1
                 self.save_servers()
                 logger.info("Servidores importados: %d nuevos de %d totales", count_new, len(imported))

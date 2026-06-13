@@ -10,13 +10,13 @@ taskkill /F /IM "RustAutoQueue.exe" /T >nul 2>&1
 taskkill /F /IM "main.exe" /T >nul 2>&1
 echo.
 
-py -m PyInstaller --noconsole --uac-admin --onefile --name="RustAutoQueue" --icon="rust.ico" --add-data="rust.ico;." --clean main.py
+py -m PyInstaller --noconsole --uac-admin --onefile --name="RustAutoQueue" --icon="rust.ico" --add-data="rust.ico;." --distpath="releases" --clean main.py
 
 echo.
 echo =======================================================
 echo               ¡COMPILACION TERMINADA!
 echo.
-echo Revisa la carpeta "dist" (que esta aqui al lado)
+echo Revisa la carpeta "releases"
 echo Ahi dentro encontraras tu nuevo "RustAutoQueue.exe" puro.
 echo =======================================================
 pause
