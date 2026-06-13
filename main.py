@@ -12,8 +12,10 @@ import threading
 import urllib.request
 import urllib.error
 import tempfile
+import datetime
+import logging
 
-CURRENT_VERSION = "2.0.4"
+CURRENT_VERSION = "2.0.5"
 # --- INFO DE ACTUALIZACIONES ---
 GITHUB_REPO = "Faaabra/Auto-queue"
 
@@ -23,7 +25,7 @@ GITHUB_REPO = "Faaabra/Auto-queue"
 def is_admin():
     try:
         return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
+    except Exception:
         return False
 
 if not is_admin():
@@ -34,6 +36,28 @@ if not is_admin():
         ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, f'"{sys.argv[0]}"', None, 1)
     sys.exit()
 
+# ==========================================
+# CARGAR FUENTE PERSONALIZADA (Poppins)
+# ==========================================
+def load_custom_fonts():
+    try:
+        FR_PRIVATE  = 0x10
+        FR_NOT_ENUM = 0x20
+        flags = FR_PRIVATE | FR_NOT_ENUM
+        base_path = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(os.path.abspath(__file__))
+        font_dir = os.path.join(base_path, "assets", "fonts")
+        
+        fonts_to_load = ["Poppins-Regular.ttf", "Poppins-Bold.ttf"]
+        for font in fonts_to_load:
+            fp = os.path.join(font_dir, font)
+            if os.path.exists(fp):
+                ctypes.windll.gdi32.AddFontResourceExW(fp, flags, 0)
+    except Exception as e:
+        print(f"Error loading fonts: {e}")
+
+load_custom_fonts()
+UI_FONT = "Poppins"
+UI_FONT_BACKUP = "Segoe UI"
 ctk.set_appearance_mode("dark")
 
 # Colores personalizados
@@ -42,9 +66,26 @@ COLOR_RUST_HOVER = "#a3321f"
 COLOR_LIGHT_TEXT = "#d1d1d1"
 COLOR_DARK_FRAME = "#1e1e1e"
 COLOR_BLUE = "#4db8ff"
+COLOR_GREEN = "#28a745"
+COLOR_YELLOW = "#ffcc00"
+COLOR_INACTIVE = "#888888"
 
-# Regex para validar formato IP:PUERTO
-IP_PORT_RE = re.compile(r'^\d{1,3}(\.\d{1,3}){3}:\d{2,5}$')
+# Regex para validar formato IP/Dominio con o sin puerto
+IP_PORT_RE = re.compile(r'^[a-zA-Z0-9._-]+(?::\d+)?$')
+
+# --- SISTEMA DE LOGGING ---
+APPDATA_DIR = os.path.join(os.environ["APPDATA"], "RustAutoQueue")
+if not os.path.exists(APPDATA_DIR):
+    os.makedirs(APPDATA_DIR)
+LOG_FILE = os.path.join(APPDATA_DIR, "activity.log")
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format="%(asctime)s  %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    encoding="utf-8"
+)
+logger = logging.getLogger("RustAutoQueue")
 
 
 class Tooltip:
@@ -66,7 +107,7 @@ class Tooltip:
         tw.wm_overrideredirect(True)
         tw.wm_geometry(f"+{x}+{y}")
         label = tk.Label(tw, text=self.text, background="#2a2a2a", foreground="#cccccc",
-                         relief="flat", font=("Segoe UI", 11), padx=10, pady=6,
+                         relief="flat", font=(UI_FONT, 11), padx=10, pady=6,
                          wraplength=300, justify="left")
         label.pack()
 
@@ -76,8 +117,220 @@ class Tooltip:
             self.tip_window = None
 
 
-# Rutas - Guardamos las IPs en AppData
-APPDATA_DIR = os.path.join(os.environ["APPDATA"], "RustAutoQueue")
+# ===================================================================
+# SISTEMA DE DIÁLOGOS PERSONALIZADOS (PREMIUM)
+# Reemplaza todos los messagebox y CTkInputDialog por defecto
+# ===================================================================
+
+class StyledDialog(ctk.CTkToplevel):
+    """
+    Diálogo modal personalizado con estilo oscuro premium.
+    Tipos soportados: 'info', 'warning', 'error', 'confirm', 'input'
+    """
+    ICONS = {
+        "info":    ("ℹ️", "#4db8ff"),
+        "warning": ("⚠️", "#ffcc00"),
+        "error":   ("❌", "#dc3545"),
+        "confirm": ("❓", "#ffcc00"),
+        "input":   ("✏️", "#4db8ff"),
+    }
+
+    def __init__(self, parent, title, message, dialog_type="info", **kwargs):
+        super().__init__(parent)
+
+        self.result = None
+        self._input_value = None
+
+        # --- Window setup ---
+        self.title(title)
+        self.resizable(False, False)
+        self.configure(fg_color="#141416")
+        self.transient(parent)
+        self.grab_set()
+
+        # Set rust icon (CTkToplevel needs a delay to apply iconbitmap)
+        try:
+            import sys as _sys
+            _icon = os.path.join(_sys._MEIPASS, 'rust.ico') if hasattr(_sys, '_MEIPASS') else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rust.ico')
+            if os.path.exists(_icon):
+                self.after(50, lambda: self.iconbitmap(_icon))
+        except Exception:
+            pass
+
+        # --- Dimensions ---
+        w = kwargs.get("width", 420)
+        h = kwargs.get("height", 240 if dialog_type != "input" else 270)
+        sw = parent.winfo_screenwidth()
+        sh = parent.winfo_screenheight()
+        x = int((sw / 2) - (w / 2))
+        y = int((sh / 2) - (h / 2))
+        self.geometry(f"{w}x{h}+{x}+{y}")
+
+        icon_emoji, icon_color = self.ICONS.get(dialog_type, self.ICONS["info"])
+
+        # --- Content container ---
+        container = ctk.CTkFrame(self, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=30, pady=(25, 20))
+
+        # Header row (icon + title)
+        header_frame = ctk.CTkFrame(container, fg_color="transparent")
+        header_frame.pack(fill="x", pady=(0, 12))
+
+        icon_lbl = ctk.CTkLabel(header_frame, text=icon_emoji, font=ctk.CTkFont(size=22))
+        icon_lbl.pack(side="left", padx=(0, 10))
+
+        title_lbl = ctk.CTkLabel(
+            header_frame, text=title,
+            font=ctk.CTkFont(family=UI_FONT, size=17, weight="bold"),
+            text_color=icon_color, anchor="w"
+        )
+        title_lbl.pack(side="left", fill="x", expand=True)
+
+        # Divider line
+        divider = ctk.CTkFrame(container, fg_color="#2b2b2f", height=1)
+        divider.pack(fill="x", pady=(0, 14))
+
+        # Message body
+        msg_lbl = ctk.CTkLabel(
+            container, text=message,
+            font=ctk.CTkFont(family=UI_FONT, size=13),
+            text_color="#cccccc", wraplength=w - 80,
+            justify="left", anchor="nw"
+        )
+        msg_lbl.pack(fill="x", pady=(0, 10))
+
+        # Input field (only for 'input' type)
+        if dialog_type == "input":
+            self._entry = ctk.CTkEntry(
+                container, height=38,
+                font=ctk.CTkFont(family=UI_FONT, size=13),
+                fg_color="#1a1a1c", border_color="#333335",
+                placeholder_text=kwargs.get("placeholder", "")
+            )
+            self._entry.pack(fill="x", pady=(0, 14))
+            self._entry.focus_set()
+            self._entry.bind("<Return>", lambda e: self._on_ok())
+
+        # --- Button area ---
+        btn_frame = ctk.CTkFrame(container, fg_color="transparent")
+        btn_frame.pack(fill="x", side="bottom")
+
+        if dialog_type == "confirm":
+            btn_cancel = ctk.CTkButton(
+                btn_frame, text="Cancelar", width=120, height=38,
+                fg_color="transparent", border_width=1, border_color="#444",
+                hover_color="#2b2b2b", text_color="#aaaaaa",
+                font=ctk.CTkFont(family=UI_FONT, size=13, weight="bold"),
+                command=self._on_cancel
+            )
+            btn_cancel.pack(side="right", padx=(8, 0))
+
+            btn_ok = ctk.CTkButton(
+                btn_frame, text="Aceptar", width=120, height=38,
+                fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER,
+                font=ctk.CTkFont(family=UI_FONT, size=13, weight="bold"),
+                command=self._on_ok
+            )
+            btn_ok.pack(side="right")
+
+        elif dialog_type == "input":
+            btn_cancel = ctk.CTkButton(
+                btn_frame, text="Cancelar", width=120, height=38,
+                fg_color="transparent", border_width=1, border_color="#444",
+                hover_color="#2b2b2b", text_color="#aaaaaa",
+                font=ctk.CTkFont(family=UI_FONT, size=13, weight="bold"),
+                command=self._on_cancel
+            )
+            btn_cancel.pack(side="right", padx=(8, 0))
+
+            btn_ok = ctk.CTkButton(
+                btn_frame, text="Guardar", width=120, height=38,
+                fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER,
+                font=ctk.CTkFont(family=UI_FONT, size=13, weight="bold"),
+                command=self._on_ok
+            )
+            btn_ok.pack(side="right")
+
+        else:
+            # Single "Entendido" button for info/warning/error
+            btn_color = {
+                "info": "#2a5a8a",
+                "warning": "#8a7a2a",
+                "error": COLOR_RUST_RED
+            }.get(dialog_type, "#2a5a8a")
+
+            btn_hover = {
+                "info": "#356ea3",
+                "warning": "#a39030",
+                "error": COLOR_RUST_HOVER
+            }.get(dialog_type, "#356ea3")
+
+            btn_ok = ctk.CTkButton(
+                btn_frame, text="Entendido", width=140, height=38,
+                fg_color=btn_color, hover_color=btn_hover,
+                font=ctk.CTkFont(family=UI_FONT, size=13, weight="bold"),
+                command=self._on_ok
+            )
+            btn_ok.pack(side="right")
+
+        # Escape to close
+        self.bind("<Escape>", lambda e: self._on_cancel())
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        # Focus
+        self.after(100, lambda: btn_ok.focus_set() if dialog_type != "input" else None)
+
+    def _on_ok(self):
+        if hasattr(self, '_entry'):
+            self._input_value = self._entry.get()
+        self.result = True
+        self.grab_release()
+        self.destroy()
+
+    def _on_cancel(self):
+        self.result = False
+        self._input_value = None
+        self.grab_release()
+        self.destroy()
+
+    def get_result(self):
+        """Block until dialog is closed, then return result."""
+        self.wait_window()
+        return self.result
+
+    def get_input(self):
+        """Block until dialog is closed, then return input text or None."""
+        self.wait_window()
+        return self._input_value
+
+
+def styled_showinfo(parent, title, message):
+    """Show a styled info dialog. Replaces messagebox.showinfo."""
+    d = StyledDialog(parent, title, message, dialog_type="info")
+    d.get_result()
+
+def styled_showwarning(parent, title, message):
+    """Show a styled warning dialog. Replaces messagebox.showwarning."""
+    d = StyledDialog(parent, title, message, dialog_type="warning")
+    d.get_result()
+
+def styled_showerror(parent, title, message):
+    """Show a styled error dialog. Replaces messagebox.showerror."""
+    d = StyledDialog(parent, title, message, dialog_type="error")
+    d.get_result()
+
+def styled_askyesno(parent, title, message):
+    """Show a styled confirm dialog. Returns True/False. Replaces messagebox.askyesno."""
+    d = StyledDialog(parent, title, message, dialog_type="confirm")
+    return d.get_result()
+
+def styled_input(parent, title, message, placeholder=""):
+    """Show a styled input dialog. Returns string or None. Replaces CTkInputDialog."""
+    d = StyledDialog(parent, title, message, dialog_type="input", placeholder=placeholder)
+    return d.get_input()
+
+
+# Rutas - Guardamos las IPs en AppData (APPDATA_DIR ya se creó arriba para logging)
 CONFIG_FILE = os.path.join(APPDATA_DIR, "servers.json")
 # Nuevo archivo para preferencias de la app
 SETTINGS_FILE = os.path.join(APPDATA_DIR, "settings.json")
@@ -88,9 +341,9 @@ class App(ctk.CTk):
 
         self.title("Rust Auto-Queue Launcher - V2")
         
-        # Centrar en la pantalla
-        window_width = 480
-        window_height = 940
+        # Centrar en la pantalla (Landscape Dashboard layout)
+        window_width = 820
+        window_height = 620
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         x_cordinate = int((screen_width / 2) - (window_width / 2))
@@ -98,7 +351,6 @@ class App(ctk.CTk):
         
         self.geometry(f"{window_width}x{window_height}+{x_cordinate}+{y_cordinate}")
         self.resizable(False, True)
-        self.minsize(480, 700)
 
         if not os.path.exists(APPDATA_DIR):
             os.makedirs(APPDATA_DIR)
@@ -109,11 +361,28 @@ class App(ctk.CTk):
         self.sys_user = os.environ.get('USERNAME', '')
         self.sys_domain = os.environ.get('USERDOMAIN', os.environ.get('COMPUTERNAME', ''))
 
-        font_title = ctk.CTkFont(family="Segoe UI", size=42, weight="bold")
-        font_subtitle = ctk.CTkFont(family="Segoe UI", size=15, weight="bold")
-        font_label = ctk.CTkFont(family="Segoe UI", size=13, weight="bold")
-        font_text = ctk.CTkFont(family="Segoe UI", size=13)
-        font_small = ctk.CTkFont(family="Segoe UI", size=12)
+        # Fuentes reutilizables
+        self.font_title = ctk.CTkFont(family=UI_FONT, size=36, weight="bold")
+        self.font_subtitle = ctk.CTkFont(family=UI_FONT, size=14, weight="bold")
+        self.font_label = ctk.CTkFont(family=UI_FONT, size=12, weight="bold")
+        self.font_text = ctk.CTkFont(family=UI_FONT, size=12)
+        self.font_small = ctk.CTkFont(family=UI_FONT, size=11)
+
+        # Cargar iconos
+        from PIL import Image
+        base_path = sys._MEIPASS if hasattr(sys, '_MEIPASS') else os.path.dirname(os.path.abspath(__file__))
+        icons_dir = os.path.join(base_path, "assets", "icons")
+        
+        def load_icon(filename, size=(16, 16)):
+            path = os.path.join(icons_dir, filename)
+            if os.path.exists(path):
+                return ctk.CTkImage(light_image=Image.open(path), dark_image=Image.open(path), size=size)
+            return None
+
+        self.icon_play = load_icon("play.png")
+        self.icon_copy = load_icon("copy.png")
+        self.icon_edit = load_icon("edit.png")
+        self.icon_delete = load_icon("delete.png")
 
         if hasattr(sys, '_MEIPASS'):
             icon_path = os.path.join(sys._MEIPASS, 'rust.ico')
@@ -122,181 +391,111 @@ class App(ctk.CTk):
         if os.path.exists(icon_path):
             try:
                 self.iconbitmap(icon_path)
-            except:
+            except Exception:
                 pass
 
+    def open_donation_link(self):
+        import webbrowser
+        webbrowser.open("https://ko-fi.com/faaabra") # Cambia este link por el real
+
+    def load_servers(self):
         self.startup_path = os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\AutoRustLauncher.bat")
 
-        # --- HEADER ---
-        self.header_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.header_frame.pack(fill="x", padx=30, pady=(20, 10))
+        # Timer para debounce del slider
+        self._delay_save_timer = None
 
-        self.title_label = ctk.CTkLabel(self.header_frame, text="RUST", font=font_title, text_color=COLOR_RUST_RED)
-        self.title_label.pack()
+        # --- ESTRUCTURA PRINCIPAL (SIDEBAR + CONTENEDOR) ---
+        self.sidebar_frame = ctk.CTkFrame(self, width=190, corner_radius=0, fg_color="#141416")
+        self.sidebar_frame.pack(side="left", fill="y")
+        self.sidebar_frame.pack_propagate(False)
         
-        self.subtitle_label = ctk.CTkLabel(self.header_frame, text="AUTO-QUEUE LAUNCHER", font=font_subtitle, text_color="white")
-        self.subtitle_label.pack(pady=(0, 5))
+        # Logotipo en el sidebar
+        logo_label = ctk.CTkLabel(self.sidebar_frame, text="RUST", font=ctk.CTkFont(family=UI_FONT, size=24, weight="bold"), text_color=COLOR_RUST_RED)
+        logo_label.pack(pady=(25, 0))
+        logo_sub = ctk.CTkLabel(self.sidebar_frame, text="AUTO-QUEUE V2", font=ctk.CTkFont(family=UI_FONT, size=11, weight="bold"), text_color="white")
+        logo_sub.pack(pady=(0, 30))
 
-        self.status_label = ctk.CTkLabel(self.header_frame, text="Estado: VERIFICANDO...", font=font_small)
-        self.status_label.pack()
-        self.status_wake_label = ctk.CTkLabel(self.header_frame, text="", font=font_small, text_color="#888888")
-        self.status_wake_label.pack()
+        # Contenedor de paneles (Derecha)
+        self.container_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
+        self.container_frame.pack(side="right", fill="both", expand=True)
 
-        # --- AUTO LOGON WINDOWS ---
-        self.req_frame = ctk.CTkFrame(self, corner_radius=12, border_width=1, border_color="#333333")
-        self.req_frame.pack(fill="x", padx=30, pady=(0, 20))
-        
-        self.req_label = ctk.CTkLabel(self.req_frame, text="🔑 AUTO-INICIO DE WINDOWS", font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"), text_color="#ffcc00")
-        self.req_label.pack(pady=(15, 0))
-        
-        self.req_desc = ctk.CTkLabel(self.req_frame, text="Imprescindible para que el PC inicie sesión solo al despertarse.", font=font_small, text_color="#aaaaaa")
-        self.req_desc.pack(pady=(0, 5))
-        
-        cred_frame = ctk.CTkFrame(self.req_frame, fg_color="transparent")
-        cred_frame.pack(fill="x", padx=15, pady=(0, 10))
+        # Cargar datos de Steam
+        self.steam_users = self.load_steam_accounts()
 
-        # Cajas visuales de solo lectura (simuladas) para mostrar Equipo y Usuario
-        ud_frame = ctk.CTkFrame(cred_frame, fg_color="transparent")
-        ud_frame.pack(fill="x", pady=(5, 5))
-        
-        lbl_domain = ctk.CTkLabel(ud_frame, text=f"Equipo: {self.sys_domain}", font=font_small, text_color="#888")
-        lbl_domain.pack(side="left", padx=10)
-        
-        lbl_user = ctk.CTkLabel(ud_frame, text=f"Usuario: {self.sys_user}", font=font_small, text_color="#888")
-        lbl_user.pack(side="right", padx=10)
+        # Configurar navegación
+        self.pages = {}
+        self.active_page = None
+        self.nav_buttons = {}
 
-        # Contraseña Entry
-        pw_inner_frame = ctk.CTkFrame(cred_frame, fg_color="transparent")
-        pw_inner_frame.pack(fill="x", pady=(5, 0))
+        btn_data = [
+            ("home", "Inicio"),
+            ("servers", "Servidores"),
+            ("wake", "Auto-Despertar"),
+            ("logs", "Actividad")
+        ]
 
-        self.btn_check_pw = ctk.CTkButton(pw_inner_frame, text="✅ Verificar", height=35, width=90, fg_color="#333333", hover_color="#555555", font=font_small, command=self.test_windows_password)
-        self.btn_check_pw.pack(side="right")
+        for page_id, text in btn_data:
+            btn = ctk.CTkButton(
+                self.sidebar_frame,
+                text=text,
+                height=40,
+                corner_radius=8,
+                fg_color="transparent",
+                text_color="#aaaaaa",
+                hover_color="#2b2b2b",
+                font=ctk.CTkFont(family=UI_FONT, size=13, weight="bold"),
+                anchor="w",
+                command=lambda p=page_id: self.switch_page(p)
+            )
+            btn.pack(fill="x", padx=15, pady=5)
+            self.nav_buttons[page_id] = btn
 
-        self.pw_entry = ctk.CTkEntry(pw_inner_frame, placeholder_text="Contraseña de inicio de Windows", show="*", font=font_text, height=35)
-        self.pw_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        Tooltip(self.pw_entry,
-                "Necesaria para el AutoLogon de Windows.\n"
-                "Permite que el PC inicie sesión solo al arrancar.\n"
-                "Si usas PIN o Windows Hello, usa tu contraseña de cuenta Microsoft.")
-
-        # Botón Modo Auto-Despertar (NUEVO)
-        self.btn_auto_wake = ctk.CTkButton(self.req_frame, text="⏰ Modo Auto-Despertar", 
-                                        font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-                                        fg_color="#1a1a1a", border_width=1, border_color=COLOR_RUST_RED, 
-                                        text_color="white", hover_color="#333", height=35, 
-                                        command=self.open_auto_wake)
-        self.btn_auto_wake.pack(padx=15, pady=(0, 15), fill="x")
-
-        # --- SETTINGS FRAME ---
-        self.settings_frame = ctk.CTkFrame(self, corner_radius=12)
-        self.settings_frame.pack(fill="x", padx=30, pady=(0, 20))
-
-        self.ip_label = ctk.CTkLabel(self.settings_frame, text="IP del Servidor de Rust:", font=font_label, text_color=COLOR_LIGHT_TEXT)
-        self.ip_label.pack(anchor="w", padx=20, pady=(15, 5))
-        
-        self.ip_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
-        self.ip_frame.pack(fill="x", padx=20, pady=(0, 10))
-
-        self.ip_entry = ctk.CTkEntry(self.ip_frame, placeholder_text="Ej: connect 192.168.1.1:28015", font=font_text, height=38, corner_radius=6, border_width=1)
-        self.ip_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        
-        self.btn_save_current = ctk.CTkButton(self.ip_frame, text="Guardar IP", width=70, height=38, 
-                                              fg_color="#333333", hover_color="#555555", font=font_small, 
-                                              command=self.save_current_ip)
-        self.btn_save_current.pack(side="left", padx=(0, 10))
-        
-        self.btn_manage_servers = ctk.CTkButton(self.ip_frame, text="📚 Mis Servidores", width=110, height=38, 
-                                                fg_color="#2b2b2b", hover_color="#444444", border_width=1, border_color="#555555", font=font_small, 
-                                                command=self.open_server_manager)
-        self.btn_manage_servers.pack(side="right")
-
-        self.delay_label = ctk.CTkLabel(self.settings_frame, text="Retraso antes de abrir el juego (segundos):", font=font_label, text_color=COLOR_LIGHT_TEXT)
-        self.delay_label.pack(anchor="w", padx=20, pady=(5, 5))
-        
-        self.slider_frame = ctk.CTkFrame(self.settings_frame, fg_color="transparent")
-        self.slider_frame.pack(fill="x", padx=20, pady=(0, 10))
-        
-        self.delay_slider = ctk.CTkSlider(self.slider_frame, from_=0, to=120, number_of_steps=120,
-                                          button_color=COLOR_RUST_RED, button_hover_color=COLOR_RUST_HOVER, progress_color=COLOR_RUST_RED)
-        self.delay_slider.pack(side="left", fill="x", expand=True)
-        _saved_delay = self.settings.get("delay", 10)
-        self.delay_slider.set(_saved_delay)
-
-        self.delay_value_label = ctk.CTkLabel(self.slider_frame, text=f"{_saved_delay}s", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"), width=35)
-        self.delay_value_label.pack(side="right", padx=(10, 0))
-        self.delay_slider.configure(command=self.update_delay_label)
-
-        # --- ACTIONS FRAME ---
-        self.actions_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.actions_frame.pack(fill="x", padx=30, pady=(0, 10))
-        
-        self.btn_activate = ctk.CTkButton(self.actions_frame, text="ACTIVAR AUTO-COLA", font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
-                                          fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER, height=45, corner_radius=8,
-                                          command=self.activate_auto_queue)
-        self.btn_activate.pack(fill="x", pady=(0, 12))
-
-        self.btn_test = ctk.CTkButton(self.actions_frame, text="Probar Conexión Ahora", font=font_text,
-                                      fg_color="#333333", hover_color="#444444", height=38, corner_radius=8,
-                                      command=self.test_connection)
-        self.btn_test.pack(fill="x", pady=(0, 12))
-
-        self.btn_deactivate = ctk.CTkButton(self.actions_frame, text="Desactivar y Borrar", font=font_text,
-                                            fg_color="transparent", hover_color="#2b2b2b", border_width=1, border_color="#555555",
-                                            text_color="#999999", height=38, corner_radius=8,
-                                            command=self.deactivate_auto_queue)
-        self.btn_deactivate.pack(fill="x")
-
-        # --- MODO UNA SOLA NOCHE ---
-        one_time_frame = ctk.CTkFrame(self, fg_color="transparent")
-        one_time_frame.pack(fill="x", padx=30, pady=(8, 0))
-        self.one_time_var = ctk.BooleanVar(value=self.settings.get("one_time_mode", False))
-        self.chk_one_time = ctk.CTkCheckBox(
-            one_time_frame,
-            text="🌙 Modo una sola noche  (el bat se elimina solo tras el primer arranque)",
-            font=font_small, text_color="#aaaaaa",
-            variable=self.one_time_var,
-            checkbox_width=18, checkbox_height=18,
-            border_color="#555555", checkmark_color="white",
-            fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER,
-            command=self._save_one_time_setting
+        # Botón de Donar / Premium
+        btn_donate = ctk.CTkButton(
+            self.sidebar_frame,
+            text="Apoyar Proyecto",
+            height=36,
+            corner_radius=8,
+            fg_color="#c4713b",
+            text_color="white",
+            hover_color="#a86032",
+            font=ctk.CTkFont(family=UI_FONT, size=12, weight="bold"),
+            command=self.open_donation_link
         )
-        self.chk_one_time.pack(anchor="w")
+        btn_donate.pack(side="bottom", fill="x", padx=15, pady=20)
 
-        # Pre-rellenar IP activa si ya hay cola configurada
+        # Crear las páginas
+        self.create_home_page()
+        self.create_servers_page()
+        self.create_wake_page()
+        self.create_logs_page()
+
+        # Iniciar en la página principal
+        self.switch_page("home")
+
+        # Rellenar IP activa si existe
         self._populate_active_ip()
         self.check_status()
 
-        # --- FIRMA DEVELOPED BY ---
-        self.footer_label = ctk.CTkLabel(self, text="Developed by faabra", font=ctk.CTkFont(family="Segoe UI", size=11, slant="italic"), text_color="#555555")
-        self.footer_label.pack(side="bottom", pady=(0, 10))
-        
-        def on_enter_footer(e):
-            self.footer_label.configure(text_color=COLOR_RUST_RED)
-        def on_leave_footer(e):
-            self.footer_label.configure(text_color="#555555")
-            
-        self.footer_label.bind("<Enter>", on_enter_footer)
-        self.footer_label.bind("<Leave>", on_leave_footer)
-        
-        # Iniciar comprobador de actualizaciones
+        # Iniciar comprobador de actualizaciones y Steam
         self.check_for_updates()
+        self._check_steam_installed()
 
-        # Quitar el foco (cursor) si se hace clic fuera del campo de texto
+        # Quitar el foco si se hace clic fuera
         def un_focus(event):
             try:
                 if event.widget.winfo_class() not in ["Entry", "Text"]:
                     event.widget.focus_set()
-            except:
+            except Exception:
                 pass
         self.bind_all("<Button-1>", un_focus)
+
+        logger.info("Aplicación iniciada v%s", CURRENT_VERSION)
 
     # --- SISTEMA DE ACTUALIZACIONES ---
     def check_for_updates(self):
         def check_logic():
             try:
-                import urllib.request
-                import json
-                
                 api_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
                 req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=5) as response:
@@ -327,17 +526,26 @@ class App(ctk.CTk):
         w.title("¡Actualización Disponible!")
         w.geometry("420x280")
         w.resizable(False, False)
+        w.configure(fg_color="#141416")
         
         x = int(self.winfo_x() + (self.winfo_width() / 2) - 210)
         y = int(self.winfo_y() + (self.winfo_height() / 2) - 140)
         w.geometry(f"+{x}+{y}")
         w.transient(self)
         w.grab_set() # Foco obligatorio
+
+        # Set icon with delay (required for CTkToplevel)
+        try:
+            _icon = os.path.join(sys._MEIPASS, 'rust.ico') if hasattr(sys, '_MEIPASS') else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rust.ico')
+            if os.path.exists(_icon):
+                w.after(50, lambda: w.iconbitmap(_icon))
+        except Exception:
+            pass
         
-        title = ctk.CTkLabel(w, text="¡Nueva Versión Encontrada!", font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold"), text_color=COLOR_BLUE)
+        title = ctk.CTkLabel(w, text="¡Nueva Versión Encontrada!", font=ctk.CTkFont(family=UI_FONT, size=20, weight="bold"), text_color=COLOR_BLUE)
         title.pack(pady=(25, 10))
         
-        desc = ctk.CTkLabel(w, text=f"Hay una nueva versión ({latest_version}) para descargar.\nTienes instalada la {CURRENT_VERSION}.\n\n¿Deseas descargarla e instalarla ahora?", font=ctk.CTkFont(family="Segoe UI", size=13))
+        desc = ctk.CTkLabel(w, text=f"Hay una nueva versión ({latest_version}) para descargar.\nTienes instalada la {CURRENT_VERSION}.\n\n¿Deseas descargarla e instalarla ahora?", font=ctk.CTkFont(family=UI_FONT, size=13))
         desc.pack(pady=10)
         
         self.update_progress = ctk.CTkProgressBar(w, width=300, progress_color=COLOR_BLUE)
@@ -363,7 +571,7 @@ class App(ctk.CTk):
     def download_and_install_update(self, download_url, window):
         try:
             if not hasattr(sys, '_MEIPASS'):
-                self.after(0, lambda: messagebox.showinfo("Info de Desarrollo", "La función de auto-parche solo funciona si ejecutas el código compilado como .exe de Windows."))
+                self.after(0, lambda: styled_showinfo(self, "Info de Desarrollo", "La función de auto-parche solo funciona si ejecutas el código compilado como .exe de Windows."))
                 self.after(0, window.destroy)
                 return
 
@@ -425,7 +633,7 @@ del "%~f0"
             os._exit(0)
             
         except Exception as e:
-            self.after(0, lambda error=e: messagebox.showerror("Error", f"Fallo al actualizar: {error}"))
+            self.after(0, lambda error=e: styled_showerror(self, "Error", f"Fallo al actualizar: {error}"))
             self.after(0, window.destroy)
 
     # --- LÓGICA DE SERVIDORES ---
@@ -434,14 +642,16 @@ del "%~f0"
             try:
                 with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except: pass
+            except Exception as e:
+                logger.warning("Error cargando servidores: %s", e)
         return {}
 
     def save_servers(self):
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.servers_data, f, indent=4)
-        except: pass
+        except Exception as e:
+            logger.error("Error guardando servidores: %s", e)
 
     # --- SISTEMA DE PREFERENCIAS ---
     def load_settings(self):
@@ -453,14 +663,16 @@ del "%~f0"
                     for k, v in default.items():
                         if k not in data: data[k] = v
                     return data
-            except: pass
+            except Exception as e:
+                logger.warning("Error cargando settings: %s", e)
         return default
 
     def save_settings(self):
         try:
             with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.settings, f, indent=4)
-        except: pass
+        except Exception as e:
+            logger.error("Error guardando settings: %s", e)
 
     def set_wake_method(self, method, window=None):
         self.settings["wake_method"] = method
@@ -469,7 +681,7 @@ del "%~f0"
         if window:
             self.refresh_auto_wake_ui(window)
         method_name = "NINGUNO" if method is None else method.replace('_', ' ').upper()
-        messagebox.showinfo("Configurado", f"Método de despertar guardado: {method_name}")
+        styled_showinfo(self, "Configurado", f"Método de despertar guardado: {method_name}")
 
     def refresh_auto_wake_ui(self, window):
         # Buscamos el tabview dentro de la ventana
@@ -482,10 +694,10 @@ del "%~f0"
         if not tab_v: return
         
         method = self.settings.get("wake_method")
-        active_text = "✅ ESTE ES MI MÉTODO ACTIVO"
+        active_text = "ESTE ES MI MÉTODO ACTIVO"
         
         # Limpiar etiquetas previas de "ACTIVO"
-        for tab_name in ["🔌 Enchufe Inteligente", "⏱️ BIOS RTC", "🌙 Software (Beta)"]:
+        for tab_name in ["Enchufe Inteligente", "BIOS RTC", "Software (Beta)"]:
             tab = tab_v.tab(tab_name)
             for child in tab.winfo_children():
                 if isinstance(child, ctk.CTkLabel) and child.cget("text") == active_text:
@@ -493,41 +705,38 @@ del "%~f0"
         
         # Añadir al tab correcto
         if method == "smart_plug":
-            ctk.CTkLabel(tab_v.tab("🔌 Enchufe Inteligente"), text=active_text, text_color="#28a745", font=ctk.CTkFont(weight="bold")).pack(pady=5)
+            ctk.CTkLabel(tab_v.tab("Enchufe Inteligente"), text=active_text, text_color="#28a745", font=ctk.CTkFont(weight="bold")).pack(pady=5)
         elif method == "bios":
-            ctk.CTkLabel(tab_v.tab("⏱️ BIOS RTC"), text=active_text, text_color="#28a745", font=ctk.CTkFont(weight="bold")).pack(pady=5)
+            ctk.CTkLabel(tab_v.tab("BIOS RTC"), text=active_text, text_color="#28a745", font=ctk.CTkFont(weight="bold")).pack(pady=5)
         elif method == "software":
-            ctk.CTkLabel(tab_v.tab("🌙 Software (Beta)"), text=active_text, text_color="#28a745", font=ctk.CTkFont(weight="bold")).pack(pady=5)
+            ctk.CTkLabel(tab_v.tab("Software (Beta)"), text=active_text, text_color="#28a745", font=ctk.CTkFont(weight="bold")).pack(pady=5)
 
     def save_current_ip(self):
         raw_ip = self.ip_entry.get().strip()
-        ip = raw_ip.replace("connect", "").strip() if raw_ip.startswith("connect") else raw_ip
+        ip = raw_ip
+        if ip.startswith("client.connect"):
+            ip = ip[14:].strip()
+        elif ip.startswith("connect"):
+            ip = ip[7:].strip()
+            
         if not ip:
-            messagebox.showwarning("Falta IP", "Introduce o pega una IP en la barra antes de pulsar Guardar.")
+            styled_showwarning(self, "Falta dirección", "Introduce o pega una IP o dominio en la barra antes de pulsar Guardar.")
             return
         if not IP_PORT_RE.match(ip):
-            messagebox.showwarning("Formato incorrecto",
-                f"La IP '{ip}' no parece válida.\nUsa el formato: 000.000.000.000:00000\nEjemplo: 192.168.1.100:28015")
+            styled_showwarning(self, "Formato incorrecto",
+                f"La dirección '{ip}' no parece válida.\nDebe ser una IP o dominio (con o sin puerto).\nEjemplos:\n- 192.168.1.100:28015\n- jugar.rustserver.com:28015")
             return
             
-        dialog = ctk.CTkInputDialog(text="Introduce un nombre (Alias) para tu servidor:", title="Guardar IP")
-        
-        try:
-            icon_path = os.path.join(sys._MEIPASS, 'rust.ico') if hasattr(sys, '_MEIPASS') else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rust.ico')
-            if os.path.exists(icon_path):
-                dialog.iconbitmap(icon_path)
-        except: pass
-            
-        alias = dialog.get_input()
+        alias = styled_input(self, "Guardar IP", "Introduce un nombre (Alias) para tu servidor:", placeholder="Ej: Rustafied EU")
         if alias:
             self.servers_data[alias] = ip
             self.save_servers()
-            messagebox.showinfo("Guardado", f"¡'{alias}' guardado en tus servidores!")
+            styled_showinfo(self, "Guardado", f"¡'{alias}' guardado en tus servidores!")
 
     def test_windows_password(self):
         password = self.pw_entry.get()
         if not password:
-            messagebox.showwarning("Aviso", "Por favor, escribe tu contraseña antes de verificar.")
+            styled_showwarning(self, "Aviso", "Por favor, escribe tu contraseña antes de verificar.")
             return
             
         advapi32 = ctypes.WinDLL('advapi32', use_last_error=True)
@@ -546,16 +755,26 @@ del "%~f0"
         
         if result:
             ctypes.windll.kernel32.CloseHandle(token)
-            messagebox.showinfo("¡Correcto!", "Verificación exitosa. Esta contraseña es válida y funcionará perfectamente para el arranque automático.")
+            styled_showinfo(self, "¡Correcto!", "Verificación exitosa. Esta contraseña es válida y funcionará perfectamente para el arranque automático.")
             self.pw_entry.configure(border_color="#28a745")
         else:
-            messagebox.showerror("Clave Incorrecta", "La autenticación ha fallado, esa no es la contraseña.\n\nNOTA: Si ingresas en Windows usando un PIN, huella o Windows Hello, la contraseña real oculta de tu cuenta Microsoft puede ser diferente.")
+            styled_showerror(self, "Clave Incorrecta", "La autenticación ha fallado, esa no es la contraseña.\n\nNOTA: Si ingresas en Windows usando un PIN, huella o Windows Hello, la contraseña real oculta de tu cuenta Microsoft puede ser diferente.")
             self.pw_entry.configure(border_color=COLOR_RUST_RED)
 
     # --- MÉTODOS DE LA UI PRINCIPAL ---
     def update_delay_label(self, value):
+        """Actualiza el label del slider y guarda con debounce (C5)."""
         self.delay_value_label.configure(text=f"{int(value)}s")
         self.settings["delay"] = int(value)
+        # Cancelar timer anterior si existe
+        if self._delay_save_timer is not None:
+            self.after_cancel(self._delay_save_timer)
+        # Guardar a disco solo 500ms después del último movimiento
+        self._delay_save_timer = self.after(500, self._save_delay_to_disk)
+
+    def _save_delay_to_disk(self):
+        """Guarda el delay a disco (llamado por el debounce)."""
+        self._delay_save_timer = None
         self.save_settings()
 
     def _populate_active_ip(self):
@@ -574,12 +793,173 @@ del "%~f0"
         self.btn_activate.configure(fg_color="#e8a020")
         self.after(160, lambda: self.btn_activate.configure(fg_color=COLOR_RUST_RED))
 
+    def _pulse_status(self):
+        """Animación de pulso en el indicador de estado (A5)."""
+        original_size = 18
+        self.status_dot.configure(font=ctk.CTkFont(size=24))
+        self.after(150, lambda: self.status_dot.configure(font=ctk.CTkFont(size=original_size)))
+
+    def _show_saved_feedback(self):
+        """Muestra feedback visual '✓ Guardado' temporal (A2)."""
+        if hasattr(self, '_saved_label') and self._saved_label.winfo_exists():
+            self._saved_label.destroy()
+        self._saved_label = ctk.CTkLabel(self.settings_frame, text="✓ Guardado", 
+                                         font=ctk.CTkFont(size=11), text_color=COLOR_GREEN)
+        self._saved_label.pack(anchor="e", padx=20)
+        self.after(2000, lambda: self._saved_label.destroy() if self._saved_label.winfo_exists() else None)
+
+    def _check_steam_installed(self):
+        """Verifica que Steam esté instalado en el sistema (B3)."""
+        def check():
+            steam_found = False
+            try:
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Valve\Steam", 0, winreg.KEY_READ)
+                winreg.CloseKey(key)
+                steam_found = True
+            except Exception:
+                try:
+                    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam", 0, winreg.KEY_READ)
+                    winreg.CloseKey(key)
+                    steam_found = True
+                except Exception:
+                    pass
+            if not steam_found:
+                # Fallback: buscar en rutas comunes
+                common_paths = [
+                    os.path.expandvars(r"%ProgramFiles(x86)%\Steam\steam.exe"),
+                    os.path.expandvars(r"%ProgramFiles%\Steam\steam.exe"),
+                ]
+                for p in common_paths:
+                    if os.path.exists(p):
+                        steam_found = True
+                        break
+            if not steam_found:
+                self.after(0, lambda: styled_showwarning(self, "Steam no detectado", 
+                    "No se ha detectado Steam instalado en este equipo.\n\n"
+                    "La aplicación necesita Steam para lanzar Rust automáticamente.\n"
+                    "Si Steam está instalado en una ubicación no estándar, puedes ignorar este aviso."))
+                logger.warning("Steam no detectado en el sistema")
+        threading.Thread(target=check, daemon=True).start()
+
+    def load_steam_accounts(self):
+        """Carga y parsea el archivo loginusers.vdf de Steam."""
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam")
+            steam_path, _ = winreg.QueryValueEx(key, "SteamPath")
+            winreg.CloseKey(key)
+        except Exception:
+            return []
+        
+        vdf_path = os.path.join(steam_path, "config", "loginusers.vdf")
+        if not os.path.exists(vdf_path):
+            return []
+            
+        try:
+            with open(vdf_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            logger.error("Error leyendo loginusers.vdf: %s", e)
+            return []
+            
+        import re
+        users = []
+        # Buscar bloques de cada SteamID de 17 dígitos
+        blocks = re.findall(r'"(\d{17})"\s*\{([^}]+)\}', content, re.DOTALL)
+        for steam_id, block_content in blocks:
+            acc_match = re.search(r'"AccountName"\s*"([^"]+)"', block_content)
+            pers_match = re.search(r'"PersonaName"\s*"([^"]+)"', block_content)
+            mr_match = re.search(r'"MostRecent"\s*"([^"]+)"', block_content)
+            
+            if acc_match:
+                account_name = acc_match.group(1)
+                persona_name = pers_match.group(1) if pers_match else account_name
+                is_most_recent = (mr_match.group(1) == "1") if mr_match else False
+                users.append({
+                    "steam_id": steam_id,
+                    "account_name": account_name,
+                    "persona_name": persona_name,
+                    "most_recent": is_most_recent
+                })
+        return users
+
+    def set_active_steam_account(self, target_account_name):
+        """Configura el usuario por defecto en el registro y en loginusers.vdf."""
+        # 1. Actualizar Registro (HKCU\Software\Valve\Steam)
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam", 0, winreg.KEY_SET_VALUE)
+            winreg.SetValueEx(key, "AutoLoginUser", 0, winreg.REG_SZ, target_account_name)
+            winreg.SetValueEx(key, "RememberPassword", 0, winreg.REG_DWORD, 1)
+            winreg.CloseKey(key)
+            logger.info("Registro Steam AutoLoginUser cambiado a: %s", target_account_name)
+        except Exception as e:
+            logger.error("Error al escribir registro de auto-inicio de Steam: %s", e)
+            
+        # 2. Actualizar loginusers.vdf (MostRecent y AllowAutoLogin)
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam")
+            steam_path, _ = winreg.QueryValueEx(key, "SteamPath")
+            winreg.CloseKey(key)
+        except Exception:
+            return
+            
+        vdf_path = os.path.join(steam_path, "config", "loginusers.vdf")
+        if not os.path.exists(vdf_path):
+            return
+            
+        try:
+            with open(vdf_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                
+            import re
+            
+            def replace_block(match):
+                steam_id = match.group(1)
+                block_content = match.group(2)
+                
+                acc_match = re.search(r'"AccountName"\s*"([^"]+)"', block_content)
+                if acc_match:
+                    acc_name = acc_match.group(1)
+                    # Comparamos quitando espacios para evitar desajustes
+                    is_target = (acc_name.strip() == target_account_name.strip())
+                    
+                    if re.search(r'"MostRecent"', block_content):
+                        block_content = re.sub(r'("MostRecent"\s*)"[^"]+"', r'\1"{}"'.format("1" if is_target else "0"), block_content)
+                    else:
+                        block_content += f'\n\t\t"MostRecent"\t\t"{1 if is_target else 0}"'
+                        
+                    if re.search(r'"AllowAutoLogin"', block_content):
+                        block_content = re.sub(r'("AllowAutoLogin"\s*)"[^"]+"', r'\1"{}"'.format("1" if is_target else "0"), block_content)
+                    else:
+                        block_content += f'\n\t\t"AllowAutoLogin"\t\t"{1 if is_target else 0}"'
+                
+                return f'"{steam_id}"\n\t{{{block_content}}}'
+                
+            new_content = re.sub(r'"(\d{17})"\s*\{([^}]+)\}', replace_block, content, flags=re.DOTALL)
+            
+            with open(vdf_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            logger.info("loginusers.vdf actualizado correctamente para: %s", target_account_name)
+        except Exception as e:
+            logger.error("Error escribiendo en loginusers.vdf: %s", e)
+
+    def on_steam_user_changed(self, choice_str):
+        """Callback cuando el usuario cambia su cuenta de Steam en el combobox."""
+        import re
+        match = re.search(r'\(([^)]+)\)$', choice_str)
+        if match:
+            account_name = match.group(1)
+            self.settings["active_steam_user"] = account_name
+            self.save_settings()
+            
+            self.set_active_steam_account(account_name)
+            self._show_saved_feedback()
+
     def get_active_ip_from_bat(self):
         try:
             with open(self.startup_path, "r", encoding="utf-8") as f:
                 match = re.search(r'\+connect\s+([^\s"]+)', f.read())
                 if match: return match.group(1)
-        except: pass
+        except Exception: pass
         return None
 
     def check_status(self):
@@ -606,21 +986,27 @@ del "%~f0"
             winreg.CloseKey(key)
             if val == "1":
                 logon_active = True
-        except: pass
+        except Exception: pass
 
-        # 3. Lógica de TEXTO de Estado
+        # 3. Lógica de TEXTO de Estado + indicador visual (A1)
         if not queue_active:
-            self.status_label.configure(text="○  INACTIVO  ○", text_color="#888888")
+            self.status_label.configure(text="INACTIVO", text_color=COLOR_INACTIVE)
+            self.status_dot.configure(text_color=COLOR_INACTIVE)
+            self.status_frame.configure(fg_color="#1a1a1a")
         elif queue_active and not logon_active:
-            self.status_label.configure(text="⚠️ PENDIENTE DE CONFIGURACIÓN", text_color="#ffcc00")
+            self.status_label.configure(text="PENDIENTE DE CONFIGURACIÓN", text_color=COLOR_YELLOW)
+            self.status_dot.configure(text_color=COLOR_YELLOW)
+            self.status_frame.configure(fg_color="#2a2510")
         else:
             display = f"({alias_display})" if alias_display else ""
-            self.status_label.configure(text=f"✨ TODO LISTO {display}", text_color="#28a745")
+            self.status_label.configure(text=f"TODO LISTO {display}", text_color=COLOR_GREEN)
+            self.status_dot.configure(text_color=COLOR_GREEN)
+            self.status_frame.configure(fg_color="#1a2a1a")
 
-        # 3. Verificar Despertador (Software + Manual)
+        # 4. Verificar Despertador (Software + Manual)
         wake_method = self.settings.get("wake_method")
         wake_active = False
-        wake_label_text = "⏰ Modo Auto-Despertar"
+        wake_label_text = "Modo Auto-Despertar"
         wake_color = "white"
         wake_border = COLOR_RUST_RED
 
@@ -632,31 +1018,36 @@ del "%~f0"
                     wake_active = True
                     match = re.search(r'(\d{1,2}:\d{2})', res.stdout)
                     t_str = f" ({match.group(1)})" if match else " (ON)"
-                    wake_label_text = f"⏰ Auto-Despertar: SOFTWARE{t_str}"
-            except: pass
+                    wake_label_text = f"Auto-Despertar: SOFTWARE{t_str}"
+            except Exception: pass
         elif wake_method == "smart_plug":
             wake_active = True
-            wake_label_text = "⏰ Auto-Despertar: ENCHUFE SMART"
+            wake_label_text = "Auto-Despertar: ENCHUFE SMART"
         elif wake_method == "bios":
             wake_active = True
-            wake_label_text = "⏰ Auto-Despertar: BIOS RTC"
+            wake_label_text = "Auto-Despertar: BIOS RTC"
 
         if wake_active:
-            wake_color = "#28a745"
-            wake_border = "#28a745"
+            wake_color = COLOR_GREEN
+            wake_border = COLOR_GREEN
             
         self.btn_auto_wake.configure(text=wake_label_text, border_color=wake_border, text_color=wake_color)
 
-        # 4. Actualizar status_wake_label (segunda línea del header)
+        # 5. Actualizar status_wake_label (segunda línea del header)
         if wake_active:
-            self.status_wake_label.configure(text=f"⏰ {wake_label_text.replace('⏰ ', '')}", text_color="#28a745")
+            self.status_wake_label.configure(text=f"{wake_label_text}", text_color=COLOR_GREEN)
         else:
-            self.status_wake_label.configure(text="⏰ Sin despertador configurado", text_color="#555555")
+            self.status_wake_label.configure(text="Sin despertador configurado", text_color="#555555")
 
-        # 5. Resumen en el status principal si todo está OK
+        # 6. Resumen en el status principal si todo está OK
         if queue_active and logon_active:
             display = f"({alias_display})" if alias_display else ""
-            self.status_label.configure(text=f"✨ TODO LISTO {display}", text_color="#28a745")
+            self.status_label.configure(text=f"TODO LISTO {display}", text_color=COLOR_GREEN)
+            self.status_dot.configure(text_color=COLOR_GREEN)
+            self.status_frame.configure(fg_color="#1a2a1a")
+
+        # Animación pulse (A5)
+        self._pulse_status()
 
     def activate_auto_queue(self):
         # Animación visual del botón
@@ -664,21 +1055,41 @@ del "%~f0"
 
         # 1. Validación de IP de Servidor
         raw_ip = self.ip_entry.get().strip()
-        ip = raw_ip.replace("connect", "").strip() if raw_ip.startswith("connect") else raw_ip
+        ip = raw_ip
+        if ip.startswith("client.connect"):
+            ip = ip[14:].strip()
+        elif ip.startswith("connect"):
+            ip = ip[7:].strip()
         
         if not ip:
-            messagebox.showwarning("Falta IP", "Por favor, introduce la IP del servidor de Rust.")
+            styled_showwarning(self, "Falta dirección", "Por favor, introduce la IP o dominio del servidor de Rust.")
             return
         if not IP_PORT_RE.match(ip):
-            messagebox.showwarning("Formato incorrecto",
-                f"La IP '{ip}' no parece válida.\nUsa el formato: 000.000.000.000:00000")
+            styled_showwarning(self, "Formato incorrecto",
+                f"La dirección '{ip}' no parece válida.\nDebe ser una IP o dominio (con o sin puerto).\nEjemplos:\n- 192.168.1.100:28015\n- jugar.rustserver.com:28015")
             return
 
         # 2. Validación de Contraseña
         password = self.pw_entry.get()
         if not password:
-            if not messagebox.askyesno("Aviso", "No has introducido tu contraseña de Windows de AutoLogon. ¿Quieres activar la auto-cola sin configurar el AutoLogon de la cuenta? (Si tienes el PC con código/clave el arranque se quedará bloqueado en la pantalla)."):
+            if not styled_askyesno(self, "Aviso", "No has introducido tu contraseña de Windows de AutoLogon. ¿Quieres activar la auto-cola sin configurar el AutoLogon de la cuenta? (Si tienes el PC con código/clave el arranque se quedará bloqueado en la pantalla)."):
                 return
+
+        # Aviso de seguridad sobre contraseña en el registro (D1)
+        if password and not self.settings.get("password_warning_shown", False):
+            if not styled_askyesno(self, "⚠️ Aviso de Seguridad",
+                "Tu contraseña se almacenará en el registro de Windows (Winlogon).\n\n"
+                "Esto es el comportamiento estándar del AutoLogon de Windows,\n"
+                "pero implica que cualquier persona con acceso al PC podría leerla.\n\n"
+                "¿Deseas continuar?"):
+                return
+            self.settings["password_warning_shown"] = True
+            self.save_settings()
+
+        # Asegurar que se configure la cuenta de Steam elegida
+        active_steam_user = self.settings.get("active_steam_user")
+        if active_steam_user:
+            self.set_active_steam_account(active_steam_user)
 
         # ACCIÓN A: Escribir credenciales en Registro (Winlogon)
         if password:
@@ -690,7 +1101,7 @@ del "%~f0"
                 winreg.SetValueEx(key, "DefaultPassword", 0, winreg.REG_SZ, password)
                 winreg.CloseKey(key)
             except Exception as e:
-                messagebox.showerror("Error Sistema", f"No se pudo modificar el registro de AutoLogon.\nPor favor reinicia la aplicación asegurándote de que aceptaste los permisos de Administrador.\nError: {e}")
+                styled_showerror(self, "Error Sistema", f"No se pudo modificar el registro de AutoLogon.\nPor favor reinicia la aplicación asegurándote de que aceptaste los permisos de Administrador.\nError: {e}")
                 return
 
         # ACCIÓN B: Generar .bat
@@ -711,9 +1122,10 @@ del "%~f0"
             with open(self.startup_path, "w", encoding="utf-8") as f:
                 f.write(bat_content)
             self.check_status()
-            messagebox.showinfo("Éxito", "¡Operación completada con éxito!\n\nSe ha configurado el inicio automático de usuario de Windows y se lanzará Rust automáticamente al encender.")
+            logger.info("Auto-cola ACTIVADA - IP: %s, Delay: %ds, OneTime: %s", ip, delay, one_time)
+            styled_showinfo(self, "Éxito", "¡Operación completada con éxito!\n\nSe ha configurado el inicio automático de usuario de Windows y se lanzará Rust automáticamente al encender.")
         except Exception as e:
-            messagebox.showerror("Error Archivo", f"No se pudo crear el archivo:\n{str(e)}")
+            styled_showerror(self, "Error Archivo", f"No se pudo crear el archivo:\n{str(e)}")
 
     def deactivate_auto_queue(self):
         # ACCIÓN A: Limpiar Registro (Winlogon)
@@ -722,132 +1134,490 @@ del "%~f0"
             winreg.SetValueEx(key, "AutoAdminLogon", 0, winreg.REG_SZ, "0")
             try:
                 winreg.DeleteValue(key, "DefaultPassword")
-            except:
+            except Exception:
                 pass
             winreg.CloseKey(key)
-        except:
-            pass
+        except Exception as e:
+            logger.warning("Error limpiando registro Winlogon: %s", e)
 
         # ACCIÓN B: Borrar .bat
         try:
             if os.path.exists(self.startup_path):
                 os.remove(self.startup_path)
             self.check_status()
-            messagebox.showinfo("Desactivado", "Todo se ha limpiado correctamente. Tu ordenador volverá a pedir contraseña como de costumbre al arrancar.")
-        except: pass
+            logger.info("Auto-cola DESACTIVADA")
+            styled_showinfo(self, "Desactivado", "Todo se ha limpiado correctamente. Tu ordenador volverá a pedir contraseña como de costumbre al arrancar.")
+        except Exception as e:
+            logger.error("Error borrando .bat de startup: %s", e)
 
     def test_connection(self):
+        """Prueba la conexión al servidor usando subprocess (D3)."""
         raw_ip = self.ip_entry.get().strip()
-        ip = raw_ip.replace("connect", "").strip() if raw_ip.startswith("connect") else raw_ip
-        if not ip: return
-        os.system(f'start explorer.exe "steam://run/252490//+connect {ip}"')
-
-    # --- PESTAÑA GESTOR DE SERVIDORES ---
-    def open_server_manager(self):
-        w = ctk.CTkToplevel(self)
-        w.title("Mis Servidores Guardados")
-        
-        window_width = 520
-        window_height = 550
-        screen_width = self.winfo_screenwidth()
-        screen_height = self.winfo_screenheight()
-        x_cordinate = int((screen_width / 2) - (window_width / 2))
-        y_cordinate = int((screen_height / 2) - (window_height / 2))
-        w.geometry(f"{window_width}x{window_height}+{x_cordinate}+{y_cordinate}")
-        w.resizable(False, False)
-        
-        import sys
-        if hasattr(sys, '_MEIPASS'):
-            icon_path = os.path.join(sys._MEIPASS, 'rust.ico')
-        else:
-            icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rust.ico')
-        if os.path.exists(icon_path):
-            try: 
-                w.iconbitmap(icon_path)
-                w.after(200, lambda: w.iconbitmap(icon_path))
-            except: pass
+        ip = raw_ip
+        if ip.startswith("client.connect"):
+            ip = ip[14:].strip()
+        elif ip.startswith("connect"):
+            ip = ip[7:].strip()
             
-        w.transient(self)
+        if not ip: return
+        if not IP_PORT_RE.match(ip):
+            styled_showwarning(self, "Formato incorrecto", f"La dirección '{ip}' no parece válida.")
+            return
+
+        # Aplicar la cuenta activa antes de probar
+        active_steam_user = self.settings.get("active_steam_user")
+        if active_steam_user:
+            self.set_active_steam_account(active_steam_user)
+
+        try:
+            subprocess.Popen(['explorer.exe', f'steam://run/252490//+connect {ip}'],
+                            creationflags=subprocess.CREATE_NO_WINDOW)
+            logger.info("Test de conexión lanzado: %s", ip)
+        except Exception as e:
+            logger.error("Error al probar conexión: %s", e)
+
+    def create_home_page(self):
+        home_page = ctk.CTkFrame(self.container_frame, fg_color="transparent")
+        self.pages["home"] = home_page
         
-        title = ctk.CTkLabel(w, text="Mis Servidores Guardados", font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"), text_color="white")
-        title.pack(pady=(20, 10))
+        home_page.grid_columnconfigure(0, weight=1, uniform="col")
+        home_page.grid_columnconfigure(1, weight=1, uniform="col")
+        home_page.grid_rowconfigure(0, weight=1)
         
-        desc = ctk.CTkLabel(w, text="Selecciona un alias de tu lista para usar su IP, o añade uno nuevo:", font=ctk.CTkFont(family="Segoe UI", size=13), text_color="#aaaaaa")
-        desc.pack(pady=(0, 15))
+        # Column 0: Configuration
+        col0 = ctk.CTkFrame(home_page, fg_color="transparent")
+        col0.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
         
-        self.scroll_servers = ctk.CTkScrollableFrame(w, width=450, height=350)
-        self.scroll_servers.pack(padx=20, pady=(0, 15), fill="both", expand=True)
+        lbl_title = ctk.CTkLabel(col0, text="PARÁMETROS", font=ctk.CTkFont(family=UI_FONT, size=18, weight="bold"), text_color=COLOR_RUST_RED)
+        lbl_title.pack(anchor="w", pady=(0, 15))
         
-        self.refresh_server_list(w)
+        # Section 1: Server IP
+        ip_label = ctk.CTkLabel(col0, text="IP o Dominio del Servidor:", font=self.font_label, text_color="white")
+        ip_label.pack(anchor="w", pady=(5, 2))
+        
+        ip_frame = ctk.CTkFrame(col0, fg_color="transparent")
+        ip_frame.pack(fill="x", pady=(0, 10))
+        
+        self.ip_entry = ctk.CTkEntry(
+            ip_frame,
+            placeholder_text="jugar.rustserver.com:28015",
+            height=36,
+            font=self.font_text,
+            fg_color="#1a1a1c",
+            border_color="#333335"
+        )
+        self.ip_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        
+        btn_save_ip = ctk.CTkButton(
+            ip_frame,
+            text="Guardar",
+            width=75,
+            height=36,
+            fg_color="#2b2b2b",
+            hover_color="#3b3b3b",
+            font=self.font_label,
+            command=self.save_current_ip
+        )
+        btn_save_ip.pack(side="right")
+        Tooltip(btn_save_ip, "Guardar esta IP con un alias personalizado")
+        
+        # Section 2: Delay Slider
+        delay_lbl = ctk.CTkLabel(col0, text="Retraso de Inicio (segundos):", font=self.font_label, text_color="white")
+        delay_lbl.pack(anchor="w", pady=(10, 2))
+        
+        delay_frame = ctk.CTkFrame(col0, fg_color="transparent")
+        delay_frame.pack(fill="x", pady=(0, 10))
+        
+        start_delay = self.settings.get("delay", 10)
+        
+        self.delay_slider = ctk.CTkSlider(
+            delay_frame,
+            from_=5,
+            to=300,
+            number_of_steps=295,
+            command=self.update_delay_label,
+            progress_color=COLOR_RUST_RED,
+            button_color=COLOR_RUST_RED,
+            button_hover_color=COLOR_RUST_HOVER
+        )
+        self.delay_slider.set(start_delay)
+        self.delay_slider.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        
+        self.delay_value_label = ctk.CTkLabel(delay_frame, text=f"{start_delay}s", font=self.font_subtitle, text_color="white", width=40)
+        self.delay_value_label.pack(side="right")
+        
+        # Section 3: Steam Switcher (combobox)
+        steam_lbl = ctk.CTkLabel(col0, text="Cuenta de Steam Activa:", font=self.font_label, text_color="white")
+        steam_lbl.pack(anchor="w", pady=(10, 2))
+        
+        self.settings_frame = ctk.CTkFrame(col0, fg_color="transparent")
+        self.settings_frame.pack(fill="x", pady=(0, 10))
+        
+        steam_choices = []
+        default_choice = None
+        
+        for user in self.steam_users:
+            display_str = f"{user['persona_name']} ({user['account_name']})"
+            steam_choices.append(display_str)
+            if user.get("most_recent") or user['account_name'] == self.settings.get("active_steam_user"):
+                default_choice = display_str
+                
+        if not steam_choices:
+            steam_choices = ["No se detectaron cuentas locales"]
+            default_choice = steam_choices[0]
+        elif not default_choice:
+            default_choice = steam_choices[0]
+            
+        self.steam_dropdown = ctk.CTkComboBox(
+            self.settings_frame,
+            values=steam_choices,
+            height=36,
+            font=self.font_text,
+            dropdown_font=self.font_text,
+            fg_color="#1a1a1c",
+            border_color="#333335",
+            dropdown_fg_color="#1e1e1f",
+            dropdown_hover_color="#2b2b2d",
+            command=self.on_steam_user_changed
+        )
+        self.steam_dropdown.set(default_choice)
+        self.steam_dropdown.pack(fill="x")
+        
+        # Section 4: One-time checkbox
+        self.one_time_var = tk.BooleanVar(value=self.settings.get("one_time_mode", False))
+        self.chk_one_time = ctk.CTkCheckBox(
+            col0,
+            text="Ejecutar una sola vez y desactivar",
+            variable=self.one_time_var,
+            onvalue=True,
+            offvalue=False,
+            command=self._save_one_time_setting,
+            font=self.font_text,
+            fg_color=COLOR_RUST_RED,
+            border_color="#333335",
+            hover_color="#2b2b2b"
+        )
+        self.chk_one_time.pack(anchor="w", pady=(15, 10))
+        
+        # Info box explaining how it works
+        info_card = ctk.CTkFrame(col0, fg_color="#18181b", border_width=1, border_color="#2b2b2f", corner_radius=8)
+        info_card.pack(fill="both", expand=True, pady=(15, 0))
+        
+        info_txt = ("¿Cómo funciona?\n"
+                    "Al encender el PC, Windows iniciará sesión de forma automática sin pedir contraseña "
+                    "y abrirá Steam para conectarse directamente a tu servidor de Rust. "
+                    "Ideal para saltarse las colas en wipe.")
+        ctk.CTkLabel(info_card, text=info_txt, font=self.font_small, text_color="#aaaaaa", justify="left", wraplength=260).pack(padx=12, pady=12)
+        
+        # Column 1: System Status & Activation
+        col1 = ctk.CTkFrame(home_page, fg_color="transparent")
+        col1.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
+        
+        lbl_status_title = ctk.CTkLabel(col1, text="ESTADO DEL SISTEMA", font=ctk.CTkFont(family=UI_FONT, size=18, weight="bold"), text_color=COLOR_RUST_RED)
+        lbl_status_title.pack(anchor="w", pady=(0, 15))
+        
+        self.status_frame = ctk.CTkFrame(col1, fg_color="#1a1a1a", border_width=1, border_color="#2d2d2d", corner_radius=10, height=80)
+        self.status_frame.pack(fill="x", pady=(0, 15))
+        self.status_frame.pack_propagate(False)
+        
+        self.status_dot = ctk.CTkLabel(self.status_frame, text="●", font=ctk.CTkFont(size=18), text_color=COLOR_INACTIVE)
+        self.status_dot.pack(side="left", padx=(15, 5))
+        
+        status_inner = ctk.CTkFrame(self.status_frame, fg_color="transparent")
+        status_inner.pack(side="left", fill="both", expand=True, pady=10)
+        
+        self.status_label = ctk.CTkLabel(status_inner, text="○  INACTIVO  ○", font=self.font_subtitle, text_color=COLOR_INACTIVE, anchor="w")
+        self.status_label.pack(fill="x", anchor="w")
+        
+        self.status_wake_label = ctk.CTkLabel(status_inner, text="Sin despertador configurado", font=self.font_small, text_color="#555555", anchor="w")
+        self.status_wake_label.pack(fill="x", anchor="w")
+        
+        # Windows password
+        pw_label = ctk.CTkLabel(col1, text="Contraseña de Windows (AutoLogon):", font=self.font_label, text_color="white")
+        pw_label.pack(anchor="w", pady=(5, 2))
+        
+        pw_frame = ctk.CTkFrame(col1, fg_color="transparent")
+        pw_frame.pack(fill="x", pady=(0, 10))
+        
+        self.pw_entry = ctk.CTkEntry(
+            pw_frame,
+            placeholder_text="Contraseña de Windows",
+            show="*",
+            height=36,
+            font=self.font_text,
+            fg_color="#1a1a1c",
+            border_color="#333335"
+        )
+        self.pw_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        Tooltip(self.pw_entry, "La contraseña del usuario de Windows para iniciar sesión de forma automática tras encender.")
+        
+        btn_verify_pw = ctk.CTkButton(
+            pw_frame,
+            text="Verificar",
+            width=80,
+            height=36,
+            fg_color="#2b2b2b",
+            hover_color="#3b3b3b",
+            font=self.font_label,
+            command=self.test_windows_password
+        )
+        btn_verify_pw.pack(side="right")
+        
+        # Action Buttons
+        self.btn_activate = ctk.CTkButton(
+            col1,
+            text="ACTIVAR AUTO-COLA",
+            height=48,
+            fg_color=COLOR_RUST_RED,
+            hover_color=COLOR_RUST_HOVER,
+            font=ctk.CTkFont(family=UI_FONT, size=14, weight="bold"),
+            command=self.activate_auto_queue
+        )
+        self.btn_activate.pack(fill="x", pady=(20, 8))
+        
+        self.btn_deactivate = ctk.CTkButton(
+            col1,
+            text="DESACTIVAR Y LIMPIAR",
+            height=36,
+            fg_color="transparent",
+            border_width=1,
+            border_color="#333335",
+            hover_color="#1f1f21",
+            text_color="#aaaaaa",
+            font=self.font_label,
+            command=self.deactivate_auto_queue
+        )
+        self.btn_deactivate.pack(fill="x", pady=0)
+        
+        self.btn_auto_wake = ctk.CTkButton(
+            col1,
+            text="Configurar Auto-Despertar",
+            height=36,
+            fg_color="transparent",
+            border_width=1,
+            border_color=COLOR_RUST_RED,
+            hover_color="#2b1e1b",
+            text_color="white",
+            font=self.font_label,
+            command=lambda: self.switch_page("wake")
+        )
+        self.btn_auto_wake.pack(fill="x", pady=(8, 8))
+        
+        btn_test = ctk.CTkButton(
+            col1,
+            text="PROBAR CONEXIÓN AHORA",
+            height=36,
+            fg_color="#1a2b3a",
+            hover_color="#203a50",
+            border_width=1,
+            border_color=COLOR_BLUE,
+            text_color=COLOR_BLUE,
+            font=self.font_label,
+            command=self.test_connection
+        )
+        btn_test.pack(fill="x", pady=0)
+
+    def create_servers_page(self):
+        servers_page = ctk.CTkFrame(self.container_frame, fg_color="transparent")
+        self.pages["servers"] = servers_page
+        
+        servers_page.grid_columnconfigure(0, weight=1)
+        servers_page.grid_rowconfigure(2, weight=1)
+        
+        # Header
+        header = ctk.CTkFrame(servers_page, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
+        
+        lbl_title = ctk.CTkLabel(header, text="MIS SERVIDORES", font=ctk.CTkFont(family=UI_FONT, size=22, weight="bold"), text_color=COLOR_RUST_RED)
+        lbl_title.pack(side="left")
+        
+        # Add server inline frame (form)
+        form_frame = ctk.CTkFrame(servers_page, fg_color="#18181b", border_width=1, border_color="#2b2b2f", corner_radius=8)
+        form_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=5)
+        
+        ctk.CTkLabel(form_frame, text="Añadir Servidor:", font=self.font_label, text_color="white").grid(row=0, column=0, columnspan=3, sticky="w", padx=12, pady=(8, 2))
+        
+        self.new_alias_entry = ctk.CTkEntry(form_frame, placeholder_text="Alias (Ej. Rustafied EU)", font=self.font_text, height=32, fg_color="#101012", border_color="#333")
+        self.new_alias_entry.grid(row=1, column=0, sticky="ew", padx=(12, 5), pady=(0, 12))
+        
+        self.new_ip_entry = ctk.CTkEntry(form_frame, placeholder_text="IP:Puerto o Dominio", font=self.font_text, height=32, fg_color="#101012", border_color="#333")
+        self.new_ip_entry.grid(row=1, column=1, sticky="ew", padx=5, pady=(0, 12))
+        
+        btn_add = ctk.CTkButton(form_frame, text="Añadir", font=self.font_label, fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER, height=32, command=self.add_new_server_inline)
+        btn_add.grid(row=1, column=2, sticky="e", padx=(5, 12), pady=(0, 12))
+        
+        form_frame.grid_columnconfigure(0, weight=1)
+        form_frame.grid_columnconfigure(1, weight=1)
+        
+        # Scrollable list frame
+        self.scroll_servers = ctk.CTkScrollableFrame(servers_page, fg_color="transparent")
+        self.scroll_servers.grid(row=2, column=0, sticky="nsew", padx=20, pady=10)
+        
+        # Footer / Import/Export Controls
+        footer = ctk.CTkFrame(servers_page, fg_color="transparent")
+        footer.grid(row=3, column=0, sticky="ew", padx=20, pady=(5, 20))
+        
+        btn_export = ctk.CTkButton(footer, text="Exportar Lista", width=120, height=32,
+                                    fg_color="#2b2b2b", hover_color="#3b3b3b", border_width=1, border_color="#444",
+                                    font=self.font_label, command=self._export_servers)
+        btn_export.pack(side="left", padx=(0, 10))
+        
+        btn_import = ctk.CTkButton(footer, text="Importar Lista", width=120, height=32,
+                                    fg_color="#2b2b2b", hover_color="#3b3b3b", border_width=1, border_color="#444",
+                                    font=self.font_label, command=lambda: self._import_servers(servers_page))
+        btn_import.pack(side="left")
+        
+        self.lbl_server_count = ctk.CTkLabel(footer, text="0 servidores", font=self.font_small, text_color="#777")
+        self.lbl_server_count.pack(side="right")
+        
+        self.refresh_server_list(servers_page)
+
+    def add_new_server_inline(self):
+        alias = self.new_alias_entry.get().strip()
+        ip = self.new_ip_entry.get().strip()
+        
+        if ip.startswith("client.connect"):
+            ip = ip[14:].strip()
+        elif ip.startswith("connect"):
+            ip = ip[7:].strip()
+            
+        if not alias or not ip:
+            styled_showwarning(self, "Campos vacíos", "Por favor, introduce tanto el alias como la dirección IP/Dominio.")
+            return
+            
+        if not IP_PORT_RE.match(ip):
+            styled_showwarning(self, "Formato incorrecto",
+                f"La dirección '{ip}' no parece válida.\nDebe ser una IP o dominio (con o sin puerto).\nEjemplos:\n- 192.168.1.100:28015\n- jugar.rustserver.com:28015")
+            return
+            
+        self.servers_data[alias] = ip
+        self.save_servers()
+        
+        self.new_alias_entry.delete(0, 'end')
+        self.new_ip_entry.delete(0, 'end')
+        
+        self.refresh_server_list(self.pages["servers"])
+        styled_showinfo(self, "Servidor Añadido", f"¡El servidor '{alias}' ha sido añadido correctamente!")
 
     def refresh_server_list(self, w):
         for widget in self.scroll_servers.winfo_children():
             widget.destroy()
             
         if not self.servers_data:
-            empty_lbl = ctk.CTkLabel(self.scroll_servers, text="Aún no tienes ningún servidor guardado en tu lista.\nAñade el primero usando el formulario de abajo.", text_color="#777777")
+            empty_lbl = ctk.CTkLabel(self.scroll_servers, text="Aún no tienes ningún servidor guardado en tu lista.\nAñade el primero usando el formulario de arriba.", text_color="#777777")
             empty_lbl.pack(pady=40)
+            if hasattr(self, 'lbl_server_count') and self.lbl_server_count.winfo_exists():
+                self.lbl_server_count.configure(text="0 servidores")
             return
+
+        if hasattr(self, 'lbl_server_count') and self.lbl_server_count.winfo_exists():
+            self.lbl_server_count.configure(text=f"{len(self.servers_data)} servidor(es)")
 
         active_ip = self.get_active_ip_from_bat()
 
         for alias, ip in self.servers_data.items():
             is_active = (ip == active_ip)
-            row_bg = "#1e2e1e" if is_active else "transparent"
-            row = ctk.CTkFrame(self.scroll_servers, fg_color=row_bg, corner_radius=8)
-            row.pack(fill="x", pady=5)
+            row_bg = "#1e2e1e" if is_active else "#1c1c1f"
+            row = ctk.CTkFrame(self.scroll_servers, fg_color=row_bg, corner_radius=8, height=60)
+            row.pack(fill="x", pady=4, padx=5)
             
             info_frame = ctk.CTkFrame(row, fg_color="transparent")
-            info_frame.pack(side="left", fill="x", expand=True, padx=(8, 0))
+            info_frame.pack(side="left", fill="both", expand=True, padx=12, pady=8)
 
             alias_header = ctk.CTkFrame(info_frame, fg_color="transparent")
-            alias_header.pack(fill="x")
-            lbl_alias = ctk.CTkLabel(alias_header, text=alias, font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"), text_color="white", anchor="w")
+            alias_header.pack(fill="x", anchor="w")
+            lbl_alias = ctk.CTkLabel(alias_header, text=alias, font=self.font_subtitle, text_color="white", anchor="w")
             lbl_alias.pack(side="left")
             if is_active:
-                ctk.CTkLabel(alias_header, text=" ✅ ACTIVO", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+                ctk.CTkLabel(alias_header, text=" ACTIVO", font=ctk.CTkFont(family=UI_FONT, size=11, weight="bold"),
                              text_color="#28a745").pack(side="left", padx=(6, 0))
-            
-            lbl_ip = ctk.CTkLabel(info_frame, text=ip, font=ctk.CTkFont(family="Segoe UI", size=12), text_color="#aaaaaa", anchor="w")
-            lbl_ip.pack(fill="x")
+
+            # IP + Status row
+            ip_status_frame = ctk.CTkFrame(info_frame, fg_color="transparent")
+            ip_status_frame.pack(fill="x", anchor="w")
+
+            lbl_ip = ctk.CTkLabel(ip_status_frame, text=ip, font=self.font_small, text_color="#aaaaaa", anchor="w")
+            lbl_ip.pack(side="left")
+
+            # Status indicator (dot + text)
+            status_dot = ctk.CTkLabel(ip_status_frame, text="●", font=ctk.CTkFont(size=10), text_color="#888888", width=14)
+            status_dot.pack(side="left", padx=(10, 2))
+            status_label = ctk.CTkLabel(ip_status_frame, text="Comprobando...", font=ctk.CTkFont(family=UI_FONT, size=10), text_color="#888888")
+            status_label.pack(side="left")
+
+            # Launch async ping
+            self._ping_server_status(ip, status_dot, status_label)
 
             def select_cmd(target_ip=ip, window=w):
                 self.ip_entry.delete(0, 'end')
                 self.ip_entry.insert(0, target_ip)
-                window.destroy()
+                if window and not isinstance(window, (ctk.CTkFrame, tk.Frame)):
+                    window.destroy()
+                else:
+                    self.switch_page("home")
+
+            def copy_cmd(target_ip=ip):
+                self.clipboard_clear()
+                self.clipboard_append(target_ip)
+                styled_showinfo(self, "Copiado", f"IP '{target_ip}' copiada al portapapeles.")
 
             def edit_cmd(target_alias=alias, window=w):
                 self._edit_server_alias(target_alias, window)
 
             def delete_cmd(target_alias=alias, window=w):
-                if messagebox.askyesno("Eliminar", f"¿Estás seguro de que quieres borrar el servidor '{target_alias}'?"):
+                if styled_askyesno(self, "Eliminar", f"¿Estás seguro de que quieres borrar el servidor '{target_alias}'?"):
                     del self.servers_data[target_alias]
                     self.save_servers()
                     self.refresh_server_list(window)
-                else:
-                    window.attributes("-topmost", True)
             
-            btn_sel = ctk.CTkButton(row, text="📋 Usar", width=70, font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"), 
-                                    fg_color="#333333", hover_color="#555555", command=select_cmd)
+            btn_sel = ctk.CTkButton(row, text=" Usar", width=80, height=32, font=self.font_label, image=self.icon_play, fg_color="#333335", hover_color="#444446", command=select_cmd)
             btn_sel.pack(side="left", padx=5, pady=6)
 
-            btn_edit = ctk.CTkButton(row, text="✏️", width=32, font=ctk.CTkFont(family="Segoe UI", size=12),
-                                     fg_color="#2b2b2b", hover_color="#444444", border_width=1, border_color="#555555",
-                                     command=edit_cmd)
-            btn_edit.pack(side="left", padx=(0, 4), pady=6)
+            btn_copy = ctk.CTkButton(row, text="", width=40, height=32, image=self.icon_copy, fg_color="#2b2b2d", hover_color="#3b3b3f", border_width=1, border_color="#555", command=copy_cmd)
+            btn_copy.pack(side="left", padx=(0, 2), pady=6)
+            Tooltip(btn_copy, "Copiar IP al portapapeles")
+
+            btn_edit = ctk.CTkButton(row, text="", width=40, height=32, image=self.icon_edit, fg_color="#2b2b2d", hover_color="#3b3b3f", border_width=1, border_color="#555", command=edit_cmd)
+            btn_edit.pack(side="left", padx=(0, 2), pady=6)
+            Tooltip(btn_edit, "Renombrar Servidor")
             
-            btn_del = ctk.CTkButton(row, text="Borrar", width=50, font=ctk.CTkFont(family="Segoe UI", size=11), 
+            btn_del = ctk.CTkButton(row, text="Borrar", width=60, height=32, font=self.font_label, 
                                     fg_color="transparent", border_width=1, border_color=COLOR_RUST_RED, text_color=COLOR_RUST_RED, hover_color="#3a1e1b", command=delete_cmd)
-            btn_del.pack(side="left", padx=(0, 8), pady=6)
+            btn_del.pack(side="left", padx=(0, 12), pady=6)
+
+    def _ping_server_status(self, ip, dot_label, text_label):
+        """Ping a server IP in a background thread and update the status dot/label."""
+        def do_ping():
+            try:
+                # Extract host (remove port if present)
+                host = ip.split(":")[0] if ":" in ip else ip
+                result = subprocess.run(
+                    ["ping", "-n", "1", "-w", "2000", host],
+                    capture_output=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+                is_online = (result.returncode == 0)
+            except Exception:
+                is_online = False
+
+            def update_ui():
+                try:
+                    if dot_label.winfo_exists() and text_label.winfo_exists():
+                        if is_online:
+                            dot_label.configure(text_color="#28a745")
+                            text_label.configure(text="Online", text_color="#28a745")
+                        else:
+                            dot_label.configure(text_color="#dc3545")
+                            text_label.configure(text="Offline", text_color="#dc3545")
+                except Exception:
+                    pass
+
+            self.after(0, update_ui)
+
+        threading.Thread(target=do_ping, daemon=True).start()
 
     def _edit_server_alias(self, old_alias, window):
-        dialog = ctk.CTkInputDialog(text=f"Nuevo nombre para '{old_alias}':", title="Renombrar Servidor")
-        try:
-            icon_path = os.path.join(sys._MEIPASS, 'rust.ico') if hasattr(sys, '_MEIPASS') else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rust.ico')
-            if os.path.exists(icon_path):
-                dialog.iconbitmap(icon_path)
-        except: pass
-        new_alias = dialog.get_input()
+        new_alias = styled_input(self, "Renombrar Servidor", f"Nuevo nombre para '{old_alias}':", placeholder="Nuevo alias")
         if new_alias and new_alias.strip() and new_alias.strip() != old_alias:
             new_alias = new_alias.strip()
             ip = self.servers_data.pop(old_alias)
@@ -855,46 +1625,81 @@ del "%~f0"
             self.save_servers()
             self.refresh_server_list(window)
 
-    # --- NUEVAS GUÍAS ---
+    def _export_servers(self):
+        """Exporta la lista de servidores a un archivo JSON."""
+        if not self.servers_data:
+            styled_showwarning(self, "Sin datos", "No tienes servidores guardados para exportar.")
+            return
+        from tkinter import filedialog
+        path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON", "*.json")],
+            initialfile="rust_servidores_backup.json",
+            title="Exportar servidores"
+        )
+        if path:
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(self.servers_data, f, indent=4, ensure_ascii=False)
+                logger.info("Servidores exportados a: %s (%d servidores)", path, len(self.servers_data))
+                styled_showinfo(self, "Éxito", f"Se han exportado {len(self.servers_data)} servidor(es) correctamente.")
+            except Exception as e:
+                styled_showerror(self, "Error", f"No se pudo exportar: {e}")
+
+    def _import_servers(self, manager_window=None):
+        """Importa servidores desde un archivo JSON."""
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            filetypes=[("JSON", "*.json")],
+            title="Importar servidores"
+        )
+        if path:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    imported = json.load(f)
+                if not isinstance(imported, dict):
+                    styled_showerror(self, "Error", "El archivo no tiene el formato esperado.")
+                    return
+                count_new = 0
+                for alias, ip in imported.items():
+                    if alias not in self.servers_data:
+                        self.servers_data[alias] = ip
+                        count_new += 1
+                self.save_servers()
+                logger.info("Servidores importados: %d nuevos de %d totales", count_new, len(imported))
+                styled_showinfo(self, "Éxito", f"Se han importado {count_new} servidor(es) nuevos.\n({len(imported) - count_new} ya existían y se omitieron.)")
+                if manager_window:
+                    self.refresh_server_list(manager_window)
+            except json.JSONDecodeError:
+                styled_showerror(self, "Error", "El archivo no es un JSON válido.")
+            except Exception as e:
+                styled_showerror(self, "Error", f"No se pudo importar: {e}")
+
     def build_step(self, parent, number, bold_title, normal_desc, color):
         f = ctk.CTkFrame(parent, fg_color="transparent")
         f.pack(fill="x", padx=15, pady=4)
         
-        num_lbl = ctk.CTkLabel(f, text=f"{number}.", font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"), text_color=color, width=25)
+        num_lbl = ctk.CTkLabel(f, text=f"{number}.", font=ctk.CTkFont(family=UI_FONT, size=18, weight="bold"), text_color=color, width=25)
         num_lbl.pack(side="left", anchor="n", pady=(2,0))
         
         tf = ctk.CTkFrame(f, fg_color="transparent")
         tf.pack(side="left", fill="x", expand=True)
         
-        title_lbl = ctk.CTkLabel(tf, text=bold_title, font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"), text_color="white", justify="left")
+        title_lbl = ctk.CTkLabel(tf, text=bold_title, font=ctk.CTkFont(family=UI_FONT, size=14, weight="bold"), text_color="white", justify="left")
         title_lbl.pack(anchor="w")
         
-        desc_lbl = ctk.CTkLabel(tf, text=normal_desc, font=ctk.CTkFont(family="Segoe UI", size=13), text_color="#aaaaaa", justify="left", wraplength=400)
+        desc_lbl = ctk.CTkLabel(tf, text=normal_desc, font=ctk.CTkFont(family=UI_FONT, size=13), text_color="#aaaaaa", justify="left", wraplength=400)
         desc_lbl.pack(anchor="w")
 
-    # --- LÓGICA DEL MODO AUTO-DESPERTAR ---
-    def cancel_wake_task(self, silent=False):
-        try:
-            subprocess.run(["schtasks", "/delete", "/tn", "RustAutoQueueWake", "/f"], 
-                           capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
-            if not silent:
-                messagebox.showinfo("Cancelado", "Despertador cancelado correctamente.")
-        except:
-            if not silent:
-                messagebox.showerror("Error", "No se pudo cancelar la tarea.")
-
     def create_wake_task(self, h, m):
-        import datetime
         now = datetime.datetime.now()
         wake_time = now.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
         
-        # Si la hora ya pasó hoy, programar para mañana
         if wake_time <= now:
             wake_time += datetime.timedelta(days=1)
             
         time_str = wake_time.strftime("%Y-%m-%dT%H:%M:%S")
         
-        # XML para la tarea programada con WakeToRun activado
         xml_template = f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <Triggers>
@@ -937,24 +1742,22 @@ del "%~f0"
 </Task>"""
         
         try:
-            # Guardar XML temporal con encoding UTF-16 necesario para schtasks
             tmp_xml = os.path.join(tempfile.gettempdir(), "wake_task.xml")
             with open(tmp_xml, "w", encoding="utf-16") as f:
                 f.write(xml_template)
             
-            # Crear la tarea
             res = subprocess.run(["schtasks", "/create", "/tn", "RustAutoQueueWake", "/xml", tmp_xml, "/f"], 
                                  capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
             
             if res.returncode == 0:
-                messagebox.showinfo("Programado", f"¡Listo! El PC se despertará y reiniciará a las {h}:{m}.\n\nRECUERDA: Ahora debes darle a 'Suspender' o 'Hibernar' en Windows.")
+                styled_showinfo(self, "Programado", f"¡Listo! El PC se despertará y reiniciará a las {h}:{m}.\n\nRECUERDA: Ahora debes darle a 'Suspender' o 'Hibernar' en Windows.")
                 self.settings["wake_method"] = "software"
                 self.save_settings()
                 self.check_status()
             else:
-                messagebox.showerror("Error", f"No se pudo crear la tarea:\n{res.stderr.decode(errors='ignore')}")
+                styled_showerror(self, "Error", f"No se pudo crear la tarea:\n{res.stderr.decode(errors='ignore')}")
         except Exception as e:
-            messagebox.showerror("Error", f"Error al generar despertador: {e}")
+            styled_showerror(self, "Error", f"Error al generar despertador: {e}")
             
     def cancel_wake_task(self, silent=False):
         try:
@@ -965,59 +1768,50 @@ del "%~f0"
                 self.save_settings()
             self.check_status()
             if not silent:
-                messagebox.showinfo("Cancelado", "Despertador cancelado correctamente.")
-        except:
+                logger.info("Despertador cancelado")
+                styled_showinfo(self, "Cancelado", "Despertador cancelado correctamente.")
+        except Exception as e:
+            logger.error("Error cancelando despertador: %s", e)
             if not silent:
-                messagebox.showerror("Error", "No se pudo cancelar la tarea.")
+                styled_showerror(self, "Error", "No se pudo cancelar la tarea.")
 
-    def open_auto_wake(self):
-        w = ctk.CTkToplevel(self)
-        w.title("⏰ Modo Auto-Despertar")
-        w.geometry("560x680")
-        w.resizable(False, False)
+    def create_wake_page(self):
+        wake_page = ctk.CTkFrame(self.container_frame, fg_color="transparent")
+        self.pages["wake"] = wake_page
         
-        # Centrar
-        x = int(self.winfo_x() + (self.winfo_width() / 2) - 280)
-        y = int(self.winfo_y() + (self.winfo_height() / 2) - 340)
-        w.geometry(f"+{x}+{y}")
-        w.transient(self)
+        wake_page.grid_columnconfigure(0, weight=1)
+        wake_page.grid_rowconfigure(2, weight=1)
         
-        # Icono (Corregido para que aparezca siempre)
-        if hasattr(sys, '_MEIPASS'):
-            icon_path = os.path.join(sys._MEIPASS, 'rust.ico')
-        else:
-            icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rust.ico')
-            
-        if os.path.exists(icon_path):
-            try: 
-                w.iconbitmap(icon_path)
-                w.after(200, lambda: w.iconbitmap(icon_path))
-            except: pass
-
-        # Título
-        ctk.CTkLabel(w, text="⏰ MODO AUTO-DESPERTAR", font=ctk.CTkFont(size=24, weight="bold"), text_color=COLOR_RUST_RED).pack(pady=(20, 5))
-        ctk.CTkLabel(w, text="Cómo entrar al server mientras duermes", font=ctk.CTkFont(size=14), text_color="#aaa").pack(pady=(0, 20))
-
-        # Pestañas
-        tabview = ctk.CTkTabview(w, width=500, height=480, segmented_button_selected_color=COLOR_RUST_RED, segmented_button_selected_hover_color=COLOR_RUST_HOVER)
-        tabview.pack(padx=20, pady=10)
-
-        t1 = tabview.add("🔌 Enchufe Inteligente")
-        t2 = tabview.add("⏱️ BIOS RTC")
-        t3 = tabview.add("🌙 Software (Beta)")
-
-        # CONTENIDO TAB 1: ENCHUFE INTELIGENTE
+        # Header
+        header = ctk.CTkFrame(wake_page, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 5))
+        
+        lbl_title = ctk.CTkLabel(header, text="AUTO-DESPERTAR", font=ctk.CTkFont(family=UI_FONT, size=22, weight="bold"), text_color=COLOR_RUST_RED)
+        lbl_title.pack(side="left")
+        
+        lbl_subtitle = ctk.CTkLabel(wake_page, text="Elige cómo encender el PC automáticamente para saltarte las colas.", font=self.font_subtitle, text_color="#aaa")
+        lbl_subtitle.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 10))
+        
+        # Tabview
+        tabview = ctk.CTkTabview(wake_page, segmented_button_selected_color=COLOR_RUST_RED, segmented_button_selected_hover_color=COLOR_RUST_HOVER)
+        tabview.grid(row=2, column=0, sticky="nsew", padx=20, pady=5)
+        
+        t1 = tabview.add("Enchufe Inteligente")
+        t2 = tabview.add("BIOS RTC")
+        t3 = tabview.add("Software (Beta)")
+        
+        # TAB 1: SMART PLUG
         txt1 = ("Esta es la opción recomendada de Diego (faabra).\n\n"
                 "1. Compra un enchufe inteligente (Alexa, Google, etc).\n"
                 "2. En la BIOS de tu PC, busca la opción 'Restore on AC Power Loss' y ponla en 'Power On'.\n"
                 "3. Apaga el PC al 100% por la noche.\n"
-                "4. Programa en tu móvil que el enchufe se encienda a las 9:00 AM.\n\n"
-                "¡Al recibir corriente, el PC detectará que debe encenderse solo y lanzará la cola de Rust!")
-        ctk.CTkLabel(t1, text=txt1, justify="left", wraplength=440, font=ctk.CTkFont(size=13)).pack(pady=20, padx=20)
-        ctk.CTkButton(t1, text="Usar este método (Enchufe)", fg_color="#333", border_width=1, border_color="#555",
-                      command=lambda: self.set_wake_method("smart_plug", w)).pack(pady=5)
-
-        # CONTENIDO TAB 2: BIOS RTC
+                "4. Programa en tu móvil que el enchufe se encienda a la hora deseada.\n\n"
+                "¡Al recibir corriente, el PC se encenderá solo y lanzará la cola de Rust!")
+        ctk.CTkLabel(t1, text=txt1, justify="left", wraplength=520, font=self.font_text).pack(pady=20, padx=20)
+        ctk.CTkButton(t1, text="Usar este método (Enchufe)", font=self.font_label, fg_color="#333", border_width=1, border_color="#555",
+                      command=lambda: self.set_wake_method("smart_plug", wake_page)).pack(pady=5)
+                      
+        # TAB 2: BIOS RTC
         txt2 = ("Si no quieres comprar nada, usa el reloj interno de tu placa base.\n\n"
                 "1. Entra a la BIOS (F2 o SUPR al arrancar).\n"
                 "2. Busca 'Advanced' -> 'APM' o 'Power Management'.\n"
@@ -1025,50 +1819,218 @@ del "%~f0"
                 "4. Pon la hora exacta a la que quieres que el PC se despierte.\n"
                 "5. Guarda y apaga el PC.\n\n"
                 "El PC se encenderá físicamente a esa hora.")
-        ctk.CTkLabel(t2, text=txt2, justify="left", wraplength=440, font=ctk.CTkFont(size=13)).pack(pady=20, padx=20)
-        ctk.CTkButton(t2, text="Usar este método (BIOS)", fg_color="#333", border_width=1, border_color="#555",
-                      command=lambda: self.set_wake_method("bios", w)).pack(pady=5)
-
-        # CONTENIDO TAB 3: SOFTWARE (SLEEP TIMER)
+        ctk.CTkLabel(t2, text=txt2, justify="left", wraplength=520, font=self.font_text).pack(pady=20, padx=20)
+        ctk.CTkButton(t2, text="Usar este método (BIOS)", font=self.font_label, fg_color="#333", border_width=1, border_color="#555",
+                      command=lambda: self.set_wake_method("bios", wake_page)).pack(pady=5)
+                      
+        # TAB 3: SOFTWARE
         ctk.CTkLabel(t3, text="Usa este despertador si no quieres tocar la BIOS.\n\nIMPORTANTE: Para que funcione, debes darle a SUSPENDER o HIBERNAR en Windows, no a Apagar.", 
-                     justify="left", wraplength=440, font=ctk.CTkFont(size=13, slant="italic"), text_color="#ffcc00").pack(pady=(10, 20))
+                     justify="left", wraplength=520, font=ctk.CTkFont(size=13, slant="italic"), text_color=COLOR_YELLOW).pack(pady=(10, 20))
         
         time_frame = ctk.CTkFrame(t3, fg_color="transparent")
         time_frame.pack(pady=10)
         
-        ctk.CTkLabel(time_frame, text="Hora:", font=ctk.CTkFont(size=13, weight="bold")).pack(side="left", padx=5)
+        ctk.CTkLabel(time_frame, text="Hora:", font=self.font_label).pack(side="left", padx=5)
         self.combo_h = ctk.CTkComboBox(time_frame, values=[f"{i:02d}" for i in range(24)], width=70)
         self.combo_h.set("09")
         self.combo_h.pack(side="left", padx=5)
         
-        ctk.CTkLabel(time_frame, text="Min:", font=ctk.CTkFont(size=13, weight="bold")).pack(side="left", padx=5)
+        ctk.CTkLabel(time_frame, text="Min:", font=self.font_label).pack(side="left", padx=5)
         self.combo_m = ctk.CTkComboBox(time_frame, values=[f"{i:02d}" for i in range(60)], width=70)
         self.combo_m.set("30")
         self.combo_m.pack(side="left", padx=5)
-
-        btn_prog = ctk.CTkButton(t3, text="⏰ Programar Despertador", fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER,
+        
+        btn_prog = ctk.CTkButton(t3, text="Programar Despertador", font=self.font_label, fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER,
                                 command=lambda: self.create_wake_task(self.combo_h.get(), self.combo_m.get()))
         btn_prog.pack(pady=10)
-
-        btn_cancel = ctk.CTkButton(t3, text="Cancelar Tarea de Windows", fg_color="transparent", border_width=1, border_color="#555",
+        
+        btn_cancel = ctk.CTkButton(t3, text="Cancelar Tarea de Windows", font=self.font_label, fg_color="transparent", border_width=1, border_color="#555",
                                    command=self.cancel_wake_task)
         btn_cancel.pack(pady=5)
         
-        ctk.CTkButton(w, text="❌ Desactivar Todos los Métodos", fg_color="transparent", text_color="#777", font=ctk.CTkFont(size=11),
-                      command=lambda: self.set_wake_method(None, w)).pack(pady=(5, 0))
-
-        # Botón de suspender el PC ahora mismo
-        ctk.CTkButton(w, text="💤 Suspender el PC ahora",
-                      font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+        # Bottom Actions
+        footer = ctk.CTkFrame(wake_page, fg_color="transparent")
+        footer.grid(row=3, column=0, sticky="ew", padx=20, pady=(5, 20))
+        
+        ctk.CTkButton(footer, text="Desactivar Todos los Métodos", fg_color="transparent", text_color="#777", font=self.font_small,
+                      command=lambda: self.set_wake_method(None, wake_page)).pack(side="left", padx=(0, 10))
+                      
+        ctk.CTkButton(footer, text="💤 Suspender el PC Ahora",
+                      font=self.font_label,
                       fg_color="#1a2a3a", hover_color="#243550",
                       border_width=1, border_color=COLOR_BLUE, text_color=COLOR_BLUE,
                       height=36,
                       command=lambda: subprocess.run(["rundll32.exe", "powrprof.dll,SetSuspendState", "0", "1", "0"],
                                                     creationflags=subprocess.CREATE_NO_WINDOW)
-                      ).pack(padx=20, pady=(6, 12), fill="x")
+                      ).pack(side="right")
+                      
+        self.refresh_auto_wake_ui(wake_page)
 
-        # Mostrar el estado marcado
-        self.refresh_auto_wake_ui(w)
+    def create_logs_page(self):
+        logs_page = ctk.CTkFrame(self.container_frame, fg_color="transparent")
+        self.pages["logs"] = logs_page
+        
+        logs_page.grid_columnconfigure(0, weight=1)
+        logs_page.grid_rowconfigure(1, weight=1)
+        
+        # Header
+        header = ctk.CTkFrame(logs_page, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
+        
+        lbl_title = ctk.CTkLabel(header, text="REGISTRO DE ACTIVIDAD", font=ctk.CTkFont(family=UI_FONT, size=22, weight="bold"), text_color=COLOR_RUST_RED)
+        lbl_title.pack(side="left")
+        
+        # Scrollable Frame for logs
+        self.log_scroll = ctk.CTkScrollableFrame(
+            logs_page,
+            fg_color="#101012",
+            border_color="#2b2b2f",
+            border_width=1,
+            corner_radius=8
+        )
+        self.log_scroll.grid(row=1, column=0, sticky="nsew", padx=20, pady=5)
+        
+        # Footer buttons
+        footer = ctk.CTkFrame(logs_page, fg_color="transparent")
+        footer.grid(row=3, column=0, sticky="ew", padx=20, pady=(5, 20))
+        
+        btn_refresh = ctk.CTkButton(
+            footer,
+            text="Actualizar",
+            width=100,
+            height=32,
+            fg_color="#2b2b2b",
+            hover_color="#3b3b3b",
+            font=self.font_label,
+            command=self.refresh_log_viewer
+        )
+        btn_refresh.pack(side="left", padx=(0, 10))
+        
+        btn_clear = ctk.CTkButton(
+            footer,
+            text="Borrar Historial",
+            width=130,
+            height=32,
+            fg_color="transparent",
+            border_width=1,
+            border_color=COLOR_RUST_RED,
+            text_color=COLOR_RUST_RED,
+            hover_color="#2b1e1b",
+            font=self.font_label,
+            command=self.clear_log_file
+        )
+        btn_clear.pack(side="left")
+        
+        self.refresh_log_viewer()
+
+    def refresh_log_viewer(self):
+        if not hasattr(self, 'log_scroll') or not self.log_scroll.winfo_exists():
+            return
+            
+        for widget in self.log_scroll.winfo_children():
+            widget.destroy()
+        
+        if os.path.exists(LOG_FILE):
+            try:
+                with open(LOG_FILE, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                tail_lines = lines[-150:]
+                
+                if not tail_lines:
+                    self._add_log_label("No hay registros de actividad todavía.", "#777777")
+                    return
+
+                for line in tail_lines:
+                    line = line.strip()
+                    if not line: continue
+                    
+                    color = "#cccccc" # Default text color
+                    if "error" in line.lower() or "fallo" in line.lower() or "timeout" in line.lower():
+                        color = COLOR_RUST_RED
+                    elif "aviso" in line.lower() or "warning" in line.lower() or "intentando" in line.lower():
+                        color = COLOR_YELLOW
+                    elif "conectado" in line.lower() or "éxito" in line.lower():
+                        color = COLOR_GREEN
+                    elif "iniciada" in line.lower() or "info" in line.lower() or "limpiado" in line.lower():
+                        color = COLOR_BLUE
+
+                    # Check if line has timestamp: "YYYY-MM-DD HH:MM:SS  Message"
+                    if len(line) > 19 and line[4] == '-' and line[19] == ' ':
+                        timestamp = line[:19]
+                        message = line[20:].strip()
+                        
+                        row_frame = ctk.CTkFrame(self.log_scroll, fg_color="transparent")
+                        row_frame.pack(fill="x", anchor="w", pady=2)
+                        
+                        lbl_time = ctk.CTkLabel(row_frame, text=f"[{timestamp}]", font=ctk.CTkFont(family="Consolas", size=11), text_color="#555555")
+                        lbl_time.pack(side="left", padx=(0, 10))
+                        
+                        lbl_msg = ctk.CTkLabel(row_frame, text=message, font=self.font_text, text_color=color, anchor="w", justify="left")
+                        lbl_msg.pack(side="left", fill="x", expand=True)
+                    else:
+                        self._add_log_label(line, color)
+                        
+            except Exception as e:
+                self._add_log_label(f"Error al leer el archivo de registros: {e}", COLOR_RUST_RED)
+        else:
+            self._add_log_label("No hay registros de actividad todavía.", "#777777")
+
+    def _add_log_label(self, text, color):
+        lbl = ctk.CTkLabel(self.log_scroll, text=text, font=self.font_text, text_color=color, anchor="w", justify="left")
+        lbl.pack(fill="x", anchor="w", pady=2)
+
+    def clear_log_file(self):
+        if styled_askyesno(self, "Confirmar", "¿Seguro que quieres borrar el archivo de actividad?"):
+            try:
+                with open(LOG_FILE, "w", encoding="utf-8") as f:
+                    f.write("")
+                logger.info("Historial de actividad limpiado por el usuario")
+                self.refresh_log_viewer()
+            except Exception as e:
+                styled_showerror(self, "Error", f"No se pudo limpiar el archivo: {e}")
+
+    def switch_page(self, page_id):
+        if self.active_page == page_id:
+            return
+            
+        for pid, btn in self.nav_buttons.items():
+            if pid == page_id:
+                btn.configure(fg_color=COLOR_RUST_RED, text_color="white", hover_color=COLOR_RUST_HOVER)
+            else:
+                btn.configure(fg_color="transparent", text_color="#aaaaaa", hover_color="#2b2b2b")
+                
+        old_page = self.pages.get(self.active_page)
+        new_page = self.pages.get(page_id)
+        
+        if not new_page:
+            return
+            
+        self.active_page = page_id
+        
+        if page_id == "logs":
+            self.refresh_log_viewer()
+            
+        new_page.lift()
+        new_page.place(relx=1.0, rely=0.0, relwidth=1.0, relheight=1.0)
+        
+        steps = 10
+        step_duration = 12
+        
+        def animate(step):
+            if not new_page.winfo_exists():
+                return
+            if step > steps:
+                new_page.place(relx=0.0, rely=0.0, relwidth=1.0, relheight=1.0)
+                if old_page and old_page.winfo_exists() and old_page != new_page:
+                    old_page.place_forget()
+                return
+            progress = step / steps
+            factor = progress * (2.0 - progress)
+            current_x = 1.0 - factor
+            new_page.place(relx=current_x, rely=0.0, relwidth=1.0, relheight=1.0)
+            self.after(step_duration, lambda: animate(step + 1))
+            
+        animate(1)
 
 
 if __name__ == "__main__":

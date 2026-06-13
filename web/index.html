@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rust Auto-Queue Launcher - Saltarse colas en Rust automáticamente</title>
+    <meta name="description" content="Evita las largas colas de espera de los servidores de Rust mientras duermes. La aplicación enciende tu PC, inicia sesión automáticamente en Steam/Windows y se une a tu servidor favorito de Rust.">
+    <meta name="keywords" content="Rust, Auto queue, Steam automatic login, Wake on lan, Rust server queue bypass, Rust bypass queue">
+    <meta name="author" content="faabra">
+    
+    <!-- Open Graph for social sharing -->
+    <meta property="og:title" content="Rust Auto-Queue Launcher V2">
+    <meta property="og:description" content="Automatiza el encendido de tu PC y entra directamente al servidor de Rust saltándote las colas de espera de forma desatendida.">
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="assets/hero_mockup.png">
+    
+    <!-- Stylesheets -->
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" type="image/x-icon" href="../rust.ico">
+</head>
+<body>
+
+    <!-- Ambient Glowing Effects -->
+    <div class="bg-glow-container" aria-hidden="true">
+        <div class="bg-glow-1"></div>
+        <div class="bg-glow-2"></div>
+    </div>
+
+    <!-- Header Navigation -->
+    <header>
+        <div class="nav-container">
+            <a href="#" class="logo" id="nav-logo">
+                <span class="logo-icon">🦀</span>
+                <span class="logo-text">RUST<span>AUTOQUEUE</span></span>
+            </a>
+            <nav aria-label="Menú principal">
+                <ul>
+                    <li><a href="#como-funciona" id="link-como-funciona">Cómo funciona</a></li>
+                    <li><a href="#screenshots" id="link-screenshots">Capturas</a></li>
+                    <li><a href="#features" id="link-features">Características</a></li>
+                    <li><a href="#faq" id="link-faq">Preguntas frecuentes</a></li>
+                    <li><a href="https://github.com/Faaabra/Auto-queue" target="_blank" rel="noopener noreferrer" id="link-github">GitHub</a></li>
+                    <li><a href="https://github.com/Faaabra/Auto-queue/releases/latest" class="btn-nav-download" id="link-nav-download">Descargar</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main>
+        
+        <!-- Hero Section -->
+        <section class="hero" id="home">
+            <div class="hero-content">
+                <div class="badge animate-fade-in" aria-label="Última versión disponible">
+                    <span class="badge-dot"></span>
+                    Versión 2.0.5 Disponible
+                </div>
+                <h1 class="animate-fade-in delay-100">Evita las colas de Rust <span class="highlight">mientras duermes</span></h1>
+                <p class="hero-desc animate-fade-in delay-200">
+                    Un lanzador de escritorio ligero y premium que automatiza el encendido de tu ordenador, el inicio de sesión seguro en Windows/Steam y la conexión desatendida a tu servidor preferido.
+                </p>
+                <div class="hero-actions animate-fade-in delay-300">
+                    <a href="https://github.com/Faaabra/Auto-queue/releases/latest" class="btn-primary" id="btn-hero-download">
+                        📥 Descargar gratis (.exe)
+                    </a>
+                    <a href="https://github.com/Faaabra/Auto-queue" target="_blank" rel="noopener noreferrer" class="btn-secondary" id="btn-hero-github">
+                        📂 Ver Código Fuente
+                    </a>
+                </div>
+                <div class="hero-stats animate-fade-in delay-400">
+                    <div class="stat-item">
+                        <span class="stat-num">100%</span>
+                        <span class="stat-label">Gratis y Open Source</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-num">3 métodos</span>
+                        <span class="stat-label">De encendido automático</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-num">&lt; 20 MB</span>
+                        <span class="stat-label">Sin instalación pesada</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="hero-image animate-fade-in delay-200">
+                <div class="mockup-wrapper">
+                    <img src="assets/hero_mockup.png" alt="Rust Auto-Queue Launcher Dashboard Mockup" class="mockup-img">
+                </div>
+            </div>
+        </section>
+
+        <!-- How It Works Section -->
+        <section class="section" id="como-funciona">
+            <div class="section-header reveal">
+                <span class="section-subtitle">El Flujo Automático</span>
+                <h2>Cómo saltarse la cola en 3 pasos</h2>
+                <p>La herramienta coordina el hardware de tu ordenador y la configuración del sistema para evitar que tengas que esperar frente a la pantalla.</p>
+            </div>
+            
+            <div class="steps-grid">
+                <div class="step-card reveal">
+                    <span class="step-num" aria-hidden="true">01</span>
+                    <div class="step-icon">🔌</div>
+                    <h3>Programa el encendido</h3>
+                    <p>Elige tu método favorito: enchufe inteligente (BIOS), temporizador del reloj del sistema (BIOS RTC) o el programador de tareas suspendidas.</p>
+                </div>
+                <div class="step-card reveal stagger-1">
+                    <span class="step-num" aria-hidden="true">02</span>
+                    <div class="step-icon">🔑</div>
+                    <h3>Sesión Auto-Iniciada</h3>
+                    <p>Al encenderse, Windows inicia sesión automáticamente con tus credenciales y Steam se loguea en tu cuenta seleccionada omitiendo el selector de usuarios.</p>
+                </div>
+                <div class="step-card reveal stagger-2">
+                    <span class="step-num" aria-hidden="true">03</span>
+                    <div class="step-icon">🦀</div>
+                    <h3>Conexión y Cola Lista</h3>
+                    <p>Tras un retraso configurable para que el sistema cargue y se conecte a Internet, Rust se abre y conecta directamente a la IP del servidor que guardaste.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Screenshots Gallery Section -->
+        <section class="section" id="screenshots">
+            <div class="section-header reveal">
+                <span class="section-subtitle">Galería de la App</span>
+                <h2>Una Interfaz Moderna e Intuitiva</h2>
+                <p>Echa un vistazo al diseño limpio de la aplicación y sus diferentes paneles de control.</p>
+            </div>
+            
+            <div class="gallery-container reveal">
+                <div class="gallery-tabs">
+                    <button class="gallery-tab-btn active" data-target="dash" id="btn-tab-dash">Panel Principal</button>
+                    <button class="gallery-tab-btn" data-target="servers" id="btn-tab-servers">Mis Servidores</button>
+                    <button class="gallery-tab-btn" data-target="wake" id="btn-tab-wake">Auto-Despertar</button>
+                </div>
+                
+                <div class="gallery-display">
+                    <div class="gallery-img-wrapper active" id="gallery-dash">
+                        <div class="mockup-wrapper">
+                            <img src="assets/hero_mockup.png" alt="Panel principal de Rust Auto-Queue" class="gallery-img">
+                        </div>
+                        <div class="gallery-caption">
+                            <h3>Panel de Control Principal</h3>
+                            <p>Configura la IP de tu servidor, gestiona retrasos, selecciona tu cuenta activa de Steam y activa la auto-cola con un solo clic.</p>
+                        </div>
+                    </div>
+                    <div class="gallery-img-wrapper" id="gallery-servers">
+                        <div class="mockup-wrapper">
+                            <img src="assets/servers_mockup.png" alt="Gestor de servidores guardados" class="gallery-img">
+                        </div>
+                        <div class="gallery-caption">
+                            <h3>Gestor de Servidores Guardados</h3>
+                            <p>Organiza, renombra, copia o importa/exporta tus servidores favoritos en un formato JSON ordenado.</p>
+                        </div>
+                    </div>
+                    <div class="gallery-img-wrapper" id="gallery-wake">
+                        <div class="mockup-wrapper">
+                            <img src="assets/wake_mockup.png" alt="Modo auto-despertar del PC" class="gallery-img">
+                        </div>
+                        <div class="gallery-caption">
+                            <h3>Múltiples Métodos de Auto-Despertar</h3>
+                            <p>Programa alarmas por hardware en BIOS o tareas automáticas por software para encender tu PC de forma desatendida.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Features Section -->
+        <section class="section" id="features">
+            <div class="section-header reveal">
+                <span class="section-subtitle">Funciones Premium</span>
+                <h2>Todo lo que necesitas en un único .exe</h2>
+                <p>Olvídate de scripts complicados en Batch o PowerShell. Una interfaz moderna y completa para controlar todo el proceso.</p>
+            </div>
+            
+            <div class="features-grid">
+                <div class="feature-card reveal">
+                    <div class="feature-icon">👤</div>
+                    <h3>Selector de Cuentas Steam</h3>
+                    <p>Detecta y te permite elegir qué cuenta de Steam usar. Modifica el registro de Windows y el archivo config de Steam para saltarse el popup de selección en el arranque.</p>
+                </div>
+                <div class="feature-card reveal stagger-1">
+                    <div class="feature-icon">⚡</div>
+                    <h3>AutoLogon de Windows</h3>
+                    <p>Configura de forma temporal las credenciales de Windows. Ideal para evitar que tu ordenador se quede bloqueado en la pantalla de ingreso con contraseña.</p>
+                </div>
+                <div class="feature-card reveal stagger-2">
+                    <div class="feature-icon">⏰</div>
+                    <h3>Modo Auto-Despertar Triple</h3>
+                    <p>Soporte nativo para enchufe inteligente (AC Power Loss), BIOS RTC Alarm y tareas programadas del sistema (WakeToRun) para PC en suspensión.</p>
+                </div>
+                <div class="feature-card reveal">
+                    <div class="feature-icon">📚</div>
+                    <h3>Lista de Servidores</h3>
+                    <p>Guarda tus servidores con alias personalizados. Además, puedes exportar o importar la lista completa en un archivo JSON para compartirla con tu clan.</p>
+                </div>
+                <div class="feature-card reveal stagger-1">
+                    <div class="feature-icon">📋</div>
+                    <h3>Limpieza Inteligente de IP</h3>
+                    <p>Copia y pega directamente comandos de la consola F1. El software limpia automáticamente los prefijos 'connect' o 'client.connect' por ti.</p>
+                </div>
+                <div class="feature-card reveal stagger-2">
+                    <div class="feature-icon">📡</div>
+                    <h3>Auto-Actualizador</h3>
+                    <p>No te preocupes por buscar nuevas versiones. La app comprueba en GitHub las actualizaciones y se auto-parchea reemplazando el archivo con un clic.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- FAQ Section -->
+        <section class="section" id="faq">
+            <div class="section-header reveal">
+                <span class="section-subtitle">Dudas habituales</span>
+                <h2>Preguntas Frecuentes</h2>
+                <p>Resolvemos las preguntas más comunes sobre la seguridad de tus datos y el hardware compatible.</p>
+            </div>
+            
+            <div class="faq-list">
+                <div class="faq-item reveal">
+                    <button class="faq-question" id="faq-q-security">
+                        ¿Es segura esta aplicación para guardar mi contraseña de Windows?
+                        <span class="faq-icon" aria-hidden="true">+</span>
+                    </button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                            Sí, se almacena en el registro del sistema a través de la API oficial de Microsoft Windows AutoLogon. Sin embargo, dado que está en texto plano en la base de datos de registro local de tu PC, cualquier persona con acceso de administrador a tu equipo podría leerla. Por seguridad, te recomendamos desactivar la auto-cola una vez termines de usarla para borrar las credenciales.
+                        </div>
+                    </div>
+                </div>
+                <div class="faq-item reveal stagger-1">
+                    <button class="faq-question" id="faq-q-vac">
+                        ¿Puedo recibir un baneo de VAC o EasyAntiCheat por usar esto?
+                        <span class="faq-icon" aria-hidden="true">+</span>
+                    </button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                            Absolutamente no. La aplicación no manipula la memoria de Rust, ni sus archivos, ni inyecta ningún código en el juego. Únicamente abre el juego a través del protocolo oficial de Steam (<code>steam://run/252490//+connect IP:PUERTO</code>) tal como lo hace tu navegador web. Es 100% seguro.
+                        </div>
+                    </div>
+                </div>
+                <div class="faq-item reveal stagger-2">
+                    <button class="faq-question" id="faq-q-wake">
+                        ¿Cuál es el mejor método de auto-despertar?
+                        <span class="faq-icon" aria-hidden="true">+</span>
+                    </button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                            El método recomendado por el desarrollador es el **Enchufe Inteligente**. Al configurar tu placa base para encender el equipo cuando detecta corriente eléctrica ("AC Power Loss: Power On"), puedes apagar el PC por completo por la noche y programar un enchufe inteligente para que le dé corriente a la hora exacta deseada. Es el método más fiable y que consume menos energía.
+                        </div>
+                    </div>
+                </div>
+                <div class="faq-item reveal">
+                    <button class="faq-question" id="faq-q-admin">
+                        ¿Por qué la aplicación pide permisos de Administrador?
+                        <span class="faq-icon" aria-hidden="true">+</span>
+                    </button>
+                    <div class="faq-answer">
+                        <div class="faq-answer-inner">
+                            Se requieren privilegios elevados de Administrador (UAC) para dos tareas clave: escribir la configuración de auto-inicio en la sección protegida del Registro de Windows (Winlogon) y crear o eliminar tareas del sistema programadas (schtasks) con permisos de despertar de suspensión ("WakeToRun").
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- CTA Box Section -->
+        <section class="cta-section">
+            <div class="cta-box reveal">
+                <h2>Olvídate de las colas de Rust</h2>
+                <p>Descarga ahora el launcher en tu ordenador, introduce el servidor de tu elección y descansa mientras el software se encarga de todo.</p>
+                <a href="https://github.com/Faaabra/Auto-queue/releases/latest" class="btn-primary" id="btn-cta-download">
+                    📥 Descargar RustAutoQueue.exe
+                </a>
+                <div class="download-details">
+                    <span>Tamaño: <strong>~18.2 MB</strong></span>
+                    <span>Versión: <strong>v2.0.5</strong></span>
+                    <span>Compatibilidad: <strong>Windows 10/11 x64</strong></span>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer>
+        <div class="footer-container">
+            <div class="footer-left">
+                <span class="logo-text">🦀 RUST<span>AUTOQUEUE</span></span>
+                <span class="footer-copy">Desarrollado con ❤️ por <strong>faabra</strong>. v2.0.5</span>
+            </div>
+            <div class="footer-links">
+                <a href="#como-funciona" id="foot-link-como">Cómo funciona</a>
+                <a href="#features" id="foot-link-features">Características</a>
+                <a href="https://github.com/Faaabra/Auto-queue" target="_blank" rel="noopener noreferrer" id="foot-link-github">Repositorio de GitHub</a>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Scripts -->
+    <script src="app.js"></script>
+</body>
+</html>

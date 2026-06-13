@@ -1,5 +1,5 @@
 ('C:\\Users\\Diego '
- 'Fabra\\Desktop\\Auto-queue\\build\\RustAutoQueue\\PYZ-00.pyz',
+ 'Fabra\\Desktop\\Auto-queue\\build\\RustAutoQueue_v2\\PYZ-00.pyz',
  [('PIL',
    'C:\\Users\\Diego '
    'Fabra\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python312\\site-packages\\PIL\\__init__.py',
@@ -1055,10 +1055,6 @@
   ('urllib.response',
    'C:\\Program '
    'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\\Lib\\urllib\\response.py',
-   'PYMODULE'),
-  ('webbrowser',
-   'C:\\Program '
-   'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\\Lib\\webbrowser.py',
    'PYMODULE'),
   ('xml',
    'C:\\Program '
