@@ -15,7 +15,7 @@ import tempfile
 import datetime
 import logging
 
-CURRENT_VERSION = "2.0.5"
+CURRENT_VERSION = "2.0.6"
 # --- INFO DE ACTUALIZACIONES ---
 GITHUB_REPO = "Faaabra/Auto-queue"
 
@@ -1348,14 +1348,15 @@ del "%~f0"
         elif not default_choice:
             default_choice = steam_choices[0]
             
-        self.steam_dropdown = ctk.CTkComboBox(
+        self.steam_dropdown = ctk.CTkOptionMenu(
             self.settings_frame,
             values=steam_choices,
             height=36,
             font=self.font_text,
             dropdown_font=self.font_text,
             fg_color="#1a1a1c",
-            border_color="#333335",
+            button_color="#1a1a1c",
+            button_hover_color="#2a2a2c",
             dropdown_fg_color="#1e1e1f",
             dropdown_hover_color="#2b2b2d",
             command=self.on_steam_user_changed
@@ -2165,12 +2166,12 @@ del "%~f0"
         time_frame.pack(pady=10)
         
         ctk.CTkLabel(time_frame, text="Hora:", font=self.font_label).pack(side="left", padx=5)
-        self.combo_h = ctk.CTkComboBox(time_frame, values=[f"{i:02d}" for i in range(24)], width=70)
+        self.combo_h = ctk.CTkOptionMenu(time_frame, values=[f"{i:02d}" for i in range(24)], width=70, fg_color="#1a1a1c", button_color="#1a1a1c", button_hover_color="#2a2a2c")
         self.combo_h.set("09")
         self.combo_h.pack(side="left", padx=5)
         
         ctk.CTkLabel(time_frame, text="Min:", font=self.font_label).pack(side="left", padx=5)
-        self.combo_m = ctk.CTkComboBox(time_frame, values=[f"{i:02d}" for i in range(60)], width=70)
+        self.combo_m = ctk.CTkOptionMenu(time_frame, values=[f"{i:02d}" for i in range(60)], width=70, fg_color="#1a1a1c", button_color="#1a1a1c", button_hover_color="#2a2a2c")
         self.combo_m.set("30")
         self.combo_m.pack(side="left", padx=5)
         
