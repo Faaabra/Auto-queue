@@ -400,6 +400,9 @@
    'C:\\Program '
    'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\\Lib\\csv.py',
    'PYMODULE'),
+  ('ctk_scrollable_dropdown',
+   'C:\\Users\\Diego Fabra\\Desktop\\Auto-queue\\ctk_scrollable_dropdown.py',
+   'PYMODULE'),
   ('ctypes',
    'C:\\Program '
    'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\\Lib\\ctypes\\__init__.py',
@@ -639,6 +642,10 @@
   ('decimal',
    'C:\\Program '
    'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\\Lib\\decimal.py',
+   'PYMODULE'),
+  ('difflib',
+   'C:\\Program '
+   'Files\\WindowsApps\\PythonSoftwareFoundation.Python.3.12_3.12.2800.0_x64__qbz5n2kfra8p0\\Lib\\difflib.py',
    'PYMODULE'),
   ('dis',
    'C:\\Program '

@@ -1,4 +1,5 @@
 import customtkinter as ctk
+from ctk_scrollable_dropdown import CTkScrollableDropdown
 import os
 import subprocess
 from tkinter import messagebox
@@ -14,6 +15,16 @@ import urllib.error
 import tempfile
 import datetime
 import logging
+import time
+from PIL import Image
+
+def get_asset_path(filename):
+    """Obtiene la ruta de un recurso, ya sea en dev o compilado por PyInstaller."""
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(os.path.dirname(__file__))
+    return os.path.join(base_path, filename)
 
 CURRENT_VERSION = "2.0.6"
 # --- INFO DE ACTUALIZACIONES ---
@@ -111,10 +122,32 @@ class Tooltip:
 
 
 # ===================================================================
-# SISTEMA DE DIÁLOGOS PERSONALIZADOS (PREMIUM)
-# Reemplaza todos los messagebox y CTkInputDialog por defecto
+# ===================================================================
+# SISTEMA DE NOTIFICACIONES TOAST Y DIÁLOGOS PERSONALIZADOS
 # ===================================================================
 
+class ToastNotification:
+    """
+    Notificación flotante no-bloqueante (Toast)
+    Aparece en la esquina inferior derecha y desaparece tras unos segundos.
+    """
+    @staticmethod
+    def show(parent, message, duration=2500):
+        # Crear un frame flotante superior
+        toast = ctk.CTkFrame(parent, fg_color="#2b2b2b", corner_radius=6, border_color="#3a3a3c", border_width=1)
+        
+        lbl = ctk.CTkLabel(toast, text=message, font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"), text_color="white")
+        lbl.pack(padx=20, pady=10)
+        
+        # Posicionar en la esquina inferior derecha, por encima de todo
+        toast.place(relx=0.95, rely=0.95, anchor="se")
+        toast.lift()
+        
+        def _hide():
+            try: toast.destroy()
+            except: pass
+            
+        parent.after(duration, _hide)
 class StyledDialog(ctk.CTkToplevel):
     """
     Diálogo modal personalizado con estilo oscuro premium.
@@ -216,6 +249,11 @@ class StyledDialog(ctk.CTkToplevel):
                 placeholder_text=kwargs.get("placeholder", "")
             )
             self._entry.pack(fill="x", pady=(0, 14))
+            
+            init_val = kwargs.get("initial_value", "")
+            if init_val:
+                self._entry.insert(0, init_val)
+                
             self._entry.focus_set()
             self._entry.bind("<Return>", lambda e: self._on_ok())
 
@@ -327,14 +365,14 @@ def styled_showerror(parent, title, message):
     d = StyledDialog(parent, title, message, dialog_type="error")
     d.get_result()
 
-def styled_askyesno(parent, title, message):
+def styled_askyesno(parent, title, message, **kwargs):
     """Show a styled confirm dialog. Returns True/False. Replaces messagebox.askyesno."""
-    d = StyledDialog(parent, title, message, dialog_type="confirm")
+    d = StyledDialog(parent, title, message, dialog_type="confirm", **kwargs)
     return d.get_result()
 
-def styled_input(parent, title, message, placeholder=""):
+def styled_input(parent, title, message, placeholder="", initial_value=""):
     """Show a styled input dialog. Returns string or None. Replaces CTkInputDialog."""
-    d = StyledDialog(parent, title, message, dialog_type="input", placeholder=placeholder)
+    d = StyledDialog(parent, title, message, dialog_type="input", placeholder=placeholder, initial_value=initial_value)
     return d.get_input()
 
 
@@ -392,7 +430,7 @@ class App(ctk.CTk):
         self._delay_save_timer = None
 
         # --- ESTRUCTURA PRINCIPAL (SIDEBAR + CONTENEDOR) ---
-        self.sidebar_frame = ctk.CTkFrame(self, width=190, corner_radius=0, fg_color="#141416")
+        self.sidebar_frame = ctk.CTkFrame(self, width=170, corner_radius=0, fg_color="#141416")
         self.sidebar_frame.pack(side="left", fill="y")
         self.sidebar_frame.pack_propagate(False)
         
@@ -413,35 +451,111 @@ class App(ctk.CTk):
         self.pages = {}
         self.active_page = None
         self.nav_buttons = {}
+        
+        self.is_sniping = False
+        self.snipe_thread = None
+        self.snipe_ip = None
+        self.nav_bars = {}
+
+        def load_icon(name):
+            try:
+                img = Image.open(get_asset_path(f"icons/{name}.png"))
+                return ctk.CTkImage(light_image=img, dark_image=img, size=(18, 18))
+            except Exception as e:
+                return None
+
+        self.icon_home = load_icon("home")
+        self.icon_snipe = load_icon("snipe")
+        self.icon_servers = load_icon("servers")
+        self.icon_wake = load_icon("wake")
+        self.icon_logs = load_icon("logs")
+        self.icon_discord = load_icon("discord")
+        self.icon_settings = load_icon("settings")
 
         btn_data = [
-            ("home", "Inicio"),
-            ("servers", "Servidores"),
-            ("wake", "Auto-Despertar"),
-            ("logs", "Actividad")
+            ("home", self.icon_home, "INICIO"),
+            ("snipe", self.icon_snipe, "WIPE-SPAM"),
+            ("servers", self.icon_servers, "SERVIDORES"),
+            ("wake", self.icon_wake, "AUTO-DESPERTAR"),
+            ("logs", self.icon_logs, "ACTIVIDAD"),
+            ("discord", self.icon_discord, "DISCORD")
         ]
 
-        for page_id, text in btn_data:
+        # Contenedor para alinear los botones arriba
+        self.nav_container = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        self.nav_container.pack(fill="both", expand=True, pady=(10, 0))
+        self.nav_container.grid_columnconfigure(0, weight=1)
+
+        for idx, (page_id, icon_img, text) in enumerate(btn_data):
+            # Frame wrapper para el botón y la barra roja
+            wrapper = ctk.CTkFrame(self.nav_container, fg_color="transparent", height=45)
+            wrapper.grid(row=idx, column=0, sticky="ew", pady=2)
+            wrapper.pack_propagate(False)
+            
+            # Barra roja indicadora (oculta por defecto)
+            bar = ctk.CTkFrame(wrapper, width=4, corner_radius=0, fg_color="transparent")
+            bar.pack(side="left", fill="y")
+            self.nav_bars[page_id] = bar
+
             btn = ctk.CTkButton(
-                self.sidebar_frame,
-                text=text,
-                height=40,
-                corner_radius=8,
+                wrapper,
+                text=f"   {text}",
+                image=icon_img,
+                height=45,
+                corner_radius=0,
                 fg_color="transparent",
                 text_color="#aaaaaa",
-                hover_color="#2b2b2b",
-                font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+                hover_color="#1a1a1c",
+                font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
                 anchor="w",
                 command=lambda p=page_id: self.switch_page(p)
             )
-            btn.pack(fill="x", padx=15, pady=5)
+            btn.pack(side="left", fill="both", expand=True)
             self.nav_buttons[page_id] = btn
+
+        # Spacer al fondo
+        spacer = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent", height=20)
+        spacer.pack(side="bottom")
+        
+        # Botón de SETTINGS al final
+        settings_wrapper = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent", height=45)
+        settings_wrapper.pack(side="bottom", fill="x", pady=2)
+        settings_wrapper.pack_propagate(False)
+        
+        settings_bar = ctk.CTkFrame(settings_wrapper, width=4, corner_radius=0, fg_color="transparent")
+        settings_bar.pack(side="left", fill="y")
+        self.nav_bars["settings"] = settings_bar
+        
+        settings_btn = ctk.CTkButton(
+            settings_wrapper,
+            text=f"   SETTINGS",
+            image=self.icon_settings,
+            height=45,
+            corner_radius=0,
+            fg_color="transparent",
+            text_color="#aaaaaa",
+            hover_color="#1a1a1c",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            anchor="w",
+            command=lambda: styled_showinfo(self, "Aviso", "Próximamente")
+        )
+        settings_btn.pack(side="left", fill="x", expand=True)
+        self.nav_buttons["settings"] = settings_btn
+
+        # Footer in sidebar
+        lbl_version = ctk.CTkLabel(self.sidebar_frame, text=f"v{CURRENT_VERSION}", font=ctk.CTkFont(size=10), text_color="#555555")
+        lbl_version.pack(side="bottom", pady=(0, 10))
+        
+        lbl_author = ctk.CTkLabel(self.sidebar_frame, text="Desarrollado por faabra", font=ctk.CTkFont(size=10), text_color="#555555")
+        lbl_author.pack(side="bottom", pady=(0, 0))
 
         # Crear las páginas
         self.create_home_page()
+        self.create_snipe_page()
         self.create_servers_page()
         self.create_wake_page()
         self.create_logs_page()
+        self.create_discord_page()
 
         # Iniciar en la página principal
         self.switch_page("home")
@@ -704,8 +818,10 @@ del "%~f0"
         return raw_val
 
     def on_home_server_selected(self, choice_or_event=None):
+        if choice_or_event is not None and isinstance(choice_or_event, str):
+            self.ip_entry.set(choice_or_event)
         raw_val = self.ip_entry.get().strip()
-        if not raw_val or raw_val == "Selecciona un servidor..." or not hasattr(self, 'home_card'):
+        if not raw_val or raw_val == "Selecciona un servidor..." or "💡" in raw_val or not hasattr(self, 'home_card'):
             if hasattr(self, 'home_card') and self.home_card.winfo_manager():
                 self.home_card.pack_forget()
             return
@@ -724,38 +840,40 @@ del "%~f0"
             port = int(ip.split(":")[1]) if ":" in ip else 28015
             
             a2s_data = None
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(2.0)
-            try:
-                sock.sendto(b'\xFF\xFF\xFF\xFFTSource Engine Query\x00', (host, port))
-                data, _ = sock.recvfrom(4096)
-                if data.startswith(b'\xFF\xFF\xFF\xFFI'):
-                    cp_m = re.search(rb'cp(\d+)', data)
-                    mp_m = re.search(rb'mp(\d+)', data)
-                    qp_m = re.search(rb'qp(\d+)', data)
+            for test_port in list(dict.fromkeys([port, port + 1, port + 15])):
+                if a2s_data is not None: break
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.settimeout(1.0)
+                try:
+                    sock.sendto(b'\xFF\xFF\xFF\xFFTSource Engine Query\x00', (host, test_port))
+                    data, _ = sock.recvfrom(4096)
+                    if data.startswith(b'\xFF\xFF\xFF\xFFI'):
+                        cp_m = re.search(rb'cp(\d+)', data)
+                        mp_m = re.search(rb'mp(\d+)', data)
+                        qp_m = re.search(rb'qp(\d+)', data)
 
-                    cp = int(cp_m.group(1)) if cp_m else -1
-                    mp = int(mp_m.group(1)) if mp_m else -1
-                    qp = int(qp_m.group(1)) if qp_m else 0
+                        cp = int(cp_m.group(1)) if cp_m else -1
+                        mp = int(mp_m.group(1)) if mp_m else -1
+                        qp = int(qp_m.group(1)) if qp_m else 0
 
-                    if cp == -1 or mp == -1:
-                        data_slice = data[5:]
-                        protocol = data_slice[0]
-                        data_slice = data_slice[1:]
-                        name_end = data_slice.find(b'\x00')
-                        data_slice = data_slice[name_end+1:]
-                        data_slice = data_slice[data_slice.find(b'\x00')+1:]
-                        data_slice = data_slice[data_slice.find(b'\x00')+1:]
-                        data_slice = data_slice[data_slice.find(b'\x00')+1:]
-                        import struct
-                        app_id, cp, mp, bots = struct.unpack('<HBBb', data_slice[:5])
+                        if cp == -1 or mp == -1:
+                            data_slice = data[5:]
+                            protocol = data_slice[0]
+                            data_slice = data_slice[1:]
+                            name_end = data_slice.find(b'\x00')
+                            data_slice = data_slice[name_end+1:]
+                            data_slice = data_slice[data_slice.find(b'\x00')+1:]
+                            data_slice = data_slice[data_slice.find(b'\x00')+1:]
+                            data_slice = data_slice[data_slice.find(b'\x00')+1:]
+                            import struct
+                            app_id, cp, mp, bots = struct.unpack('<HBBb', data_slice[:5])
 
-                    players_text = f"{cp}/{mp} PLAYERS"
-                    if qp > 0:
-                        players_text += f" (+{qp} EN COLA)"
-                    a2s_data = {"players_text": players_text}
-            except Exception: pass
-            finally: sock.close()
+                        players_text = f"{cp}/{mp} PLAYERS"
+                        if qp > 0:
+                            players_text += f" (+{qp} EN COLA)"
+                        a2s_data = {"players_text": players_text}
+                except Exception: pass
+                finally: sock.close()
 
             is_online = False
             ms = None
@@ -839,16 +957,33 @@ del "%~f0"
         self.settings["one_time_mode"] = self.one_time_var.get()
         self.save_settings()
 
+    def _save_smart_wipe_setting(self):
+        self.settings["smart_wipe"] = self.smart_wipe_var.get()
+        self.save_settings()
+
     def _flash_activate_button(self):
         """Breve animación visual al pulsar el botón de activar."""
         self.btn_activate.configure(fg_color="#e8a020")
         self.after(160, lambda: self.btn_activate.configure(fg_color=COLOR_RUST_RED))
 
     def _pulse_status(self):
-        """Animación de pulso en el indicador de estado (A5)."""
-        original_size = 18
-        self.status_dot.configure(font=ctk.CTkFont(size=24))
-        self.after(150, lambda: self.status_dot.configure(font=ctk.CTkFont(size=original_size)))
+        """Animación de pulso suave en el indicador de estado."""
+        def animate_pulse(step):
+            if not hasattr(self, 'status_dot') or not self.status_dot.winfo_exists(): return
+            if step <= 10:
+                # Crecer: de 18 a 22
+                size = 18 + int(step * 0.4)
+            elif step <= 20:
+                # Encoger: de 22 a 18
+                size = 22 - int((step - 10) * 0.4)
+            else:
+                self.status_dot.configure(font=ctk.CTkFont(size=18))
+                return
+                
+            self.status_dot.configure(font=ctk.CTkFont(size=size))
+            self.after(20, lambda: animate_pulse(step + 1))
+            
+        animate_pulse(1)
 
     def _show_saved_feedback(self):
         """Muestra feedback visual '✓ Guardado' temporal (A2)."""
@@ -995,6 +1130,7 @@ del "%~f0"
 
     def on_steam_user_changed(self, choice_str):
         """Callback cuando el usuario cambia su cuenta de Steam en el combobox."""
+        self.steam_dropdown.set(choice_str)
         import re
         match = re.search(r'\(([^)]+)\)$', choice_str)
         if match:
@@ -1025,9 +1161,11 @@ del "%~f0"
                 if ip == active_ip:
                     alias_display = alias
                     break
-            self.btn_activate.configure(text="ACTUALIZAR CONFIGURACIÓN")
+            if self.btn_activate.cget("text") != "ACTUALIZAR CONFIGURACIÓN":
+                self.btn_activate.configure(text="ACTUALIZAR CONFIGURACIÓN")
         else:
-            self.btn_activate.configure(text="ACTIVAR AUTO-COLA")
+            if self.btn_activate.cget("text") != "ACTIVAR AUTO-COLA":
+                self.btn_activate.configure(text="ACTIVAR AUTO-COLA")
 
         # 2. Verificar Auto-Logon
         logon_active = False
@@ -1041,18 +1179,22 @@ del "%~f0"
 
         # 3. Lógica de TEXTO de Estado + indicador visual (A1)
         if not queue_active:
-            self.status_label.configure(text="INACTIVO", text_color=COLOR_INACTIVE)
-            self.status_dot.configure(text_color=COLOR_INACTIVE)
-            self.status_frame.configure(fg_color="#1a1a1a")
+            if self.status_label.cget("text") != "INACTIVO":
+                self.status_label.configure(text="INACTIVO", text_color=COLOR_INACTIVE)
+                self.status_dot.configure(text_color=COLOR_INACTIVE)
+                self.status_frame.configure(fg_color="#1a1a1a")
         elif queue_active and not logon_active:
-            self.status_label.configure(text="PENDIENTE DE CONFIGURACIÓN", text_color=COLOR_YELLOW)
-            self.status_dot.configure(text_color=COLOR_YELLOW)
-            self.status_frame.configure(fg_color="#2a2510")
+            if self.status_label.cget("text") != "PENDIENTE DE CONFIGURACIÓN":
+                self.status_label.configure(text="PENDIENTE DE CONFIGURACIÓN", text_color=COLOR_YELLOW)
+                self.status_dot.configure(text_color=COLOR_YELLOW)
+                self.status_frame.configure(fg_color="#2a2510")
         else:
             display = f"({alias_display})" if alias_display else ""
-            self.status_label.configure(text=f"TODO LISTO {display}", text_color=COLOR_GREEN)
-            self.status_dot.configure(text_color=COLOR_GREEN)
-            self.status_frame.configure(fg_color="#1a2a1a")
+            target_text = f"TODO LISTO {display}"
+            if self.status_label.cget("text") != target_text:
+                self.status_label.configure(text=target_text, text_color=COLOR_GREEN)
+                self.status_dot.configure(text_color=COLOR_GREEN)
+                self.status_frame.configure(fg_color="#1a2a1a")
 
         # 4. Verificar Despertador (Software + Manual)
         wake_method = self.settings.get("wake_method")
@@ -1082,23 +1224,25 @@ del "%~f0"
             wake_color = COLOR_GREEN
             wake_border = COLOR_GREEN
             
-        self.btn_auto_wake.configure(text=wake_label_text, border_color=wake_border, text_color=wake_color)
+        if self.btn_auto_wake.cget("text") != wake_label_text:
+            self.btn_auto_wake.configure(text=wake_label_text, border_color=wake_border, text_color=wake_color)
 
         # 5. Actualizar status_wake_label (segunda línea del header)
         if wake_active:
-            self.status_wake_label.configure(text=f"{wake_label_text}", text_color=COLOR_GREEN)
+            if self.status_wake_label.cget("text") != wake_label_text:
+                self.status_wake_label.configure(text=wake_label_text, text_color=COLOR_GREEN)
         else:
-            self.status_wake_label.configure(text="Sin despertador configurado", text_color="#555555")
+            if self.status_wake_label.cget("text") != "Sin despertador configurado":
+                self.status_wake_label.configure(text="Sin despertador configurado", text_color="#555555")
 
         # 6. Resumen en el status principal si todo está OK
         if queue_active and logon_active:
             display = f"({alias_display})" if alias_display else ""
-            self.status_label.configure(text=f"TODO LISTO {display}", text_color=COLOR_GREEN)
-            self.status_dot.configure(text_color=COLOR_GREEN)
-            self.status_frame.configure(fg_color="#1a2a1a")
-
-        # Animación pulse (A5)
-        self._pulse_status()
+            target_text = f"TODO LISTO {display}"
+            if self.status_label.cget("text") != target_text:
+                self.status_label.configure(text=target_text, text_color=COLOR_GREEN)
+                self.status_dot.configure(text_color=COLOR_GREEN)
+                self.status_frame.configure(fg_color="#1a2a1a")
 
     def activate_auto_queue(self):
         # Animación visual del botón
@@ -1123,7 +1267,7 @@ del "%~f0"
         # 2. Validación de Contraseña
         password = self.pw_entry.get()
         if not password:
-            if not styled_askyesno(self, "Aviso", "No has introducido tu contraseña de Windows de AutoLogon. ¿Quieres activar la auto-cola sin configurar el AutoLogon de la cuenta? (Si tienes el PC con código/clave el arranque se quedará bloqueado en la pantalla)."):
+            if not styled_askyesno(self, "Aviso", "No has introducido tu contraseña de Windows de AutoLogon. ¿Quieres activar la auto-cola sin configurar el AutoLogon de la cuenta? (Si tienes el PC con código/clave el arranque se quedará bloqueado en la pantalla).", height=280):
                 return
 
         # Aviso de seguridad sobre contraseña en el registro (D1)
@@ -1132,7 +1276,7 @@ del "%~f0"
                 "Tu contraseña se almacenará en el registro de Windows (Winlogon).\n\n"
                 "Esto es el comportamiento estándar del AutoLogon de Windows,\n"
                 "pero implica que cualquier persona con acceso al PC podría leerla.\n\n"
-                "¿Deseas continuar?"):
+                "¿Deseas continuar?", height=280):
                 return
             self.settings["password_warning_shown"] = True
             self.save_settings()
@@ -1158,16 +1302,28 @@ del "%~f0"
         # ACCIÓN B: Generar .bat
         delay = int(self.delay_slider.get())
         one_time = self.one_time_var.get()
+        smart_wipe = self.smart_wipe_var.get()
+        
+        if smart_wipe:
+            import sys, os
+            is_compiled = getattr(sys, 'frozen', False)
+            if is_compiled:
+                exe_cmd = f'start "" "{sys.executable}" --smart-wipe {ip}'
+            else:
+                exe_cmd = f'start "" "{sys.executable}" "{os.path.abspath(__file__)}" --smart-wipe {ip}'
+        else:
+            exe_cmd = f'start explorer.exe "steam://run/252490//+connect%20{ip}%20+aq%20{int(time.time())}"'
+
         if one_time:
             bat_content = (
                 f'@echo off\n'
                 f'timeout /t {delay} /nobreak\n'
-                f'start explorer.exe "steam://run/252490//+connect {ip}"\n'
+                f'{exe_cmd}\n'
                 f'timeout /t 5 /nobreak\n'
                 f'del "%~f0"\n'
             )
         else:
-            bat_content = f'@echo off\ntimeout /t {delay} /nobreak\nstart explorer.exe "steam://run/252490//+connect {ip}"\n'
+            bat_content = f'@echo off\ntimeout /t {delay} /nobreak\n{exe_cmd}\n'
         
         try:
             with open(self.startup_path, "w", encoding="utf-8") as f:
@@ -1221,7 +1377,7 @@ del "%~f0"
             self.set_active_steam_account(active_steam_user)
 
         try:
-            subprocess.Popen(['explorer.exe', f'steam://run/252490//+connect {ip}'],
+            subprocess.Popen(['explorer.exe', f'steam://run/252490//+connect%20{ip}%20+aq%20{int(time.time())}'],
                             creationflags=subprocess.CREATE_NO_WINDOW)
             logger.info("Test de conexión lanzado: %s", ip)
         except Exception as e:
@@ -1251,35 +1407,27 @@ del "%~f0"
         
         server_aliases = list(self.servers_data.keys())
         if not server_aliases:
-            server_aliases = [""]
+            server_aliases = ["💡 Añade un servidor (Pestaña 'Servidores')"]
             
-        self.ip_entry = ctk.CTkComboBox(
+        self.ip_entry = ctk.CTkOptionMenu(
             self.ip_frame,
             values=server_aliases,
-            state="readonly",
             height=40,
             font=ctk.CTkFont(size=14),
             fg_color="#101012",
-            border_color="#333335",
             button_color="#2b2b2b",
-            button_hover_color="#3b3b3b",
-            dropdown_fg_color="#18181a",
-            dropdown_hover_color="#2b2b2f",
-            dropdown_text_color="#ffffff",
-            command=self.on_home_server_selected
+            button_hover_color="#3b3b3b"
         )
         self.ip_entry.pack(fill="x", expand=True)
         
-        # Permitir abrir el desplegable haciendo clic en cualquier parte del campo de texto
-        def toggle_dropdown(event):
-            if hasattr(self.ip_entry, "_dropdown_menu") and self.ip_entry._dropdown_menu.winfo_ismapped():
-                self.ip_entry._dropdown_menu._withdraw()
-            else:
-                self.ip_entry._open_dropdown_menu()
-                
-        if hasattr(self.ip_entry, "_entry"):
-            self.ip_entry._entry.bind("<Button-1>", toggle_dropdown)
-        self.ip_entry.set("Selecciona un servidor...")
+        self.ip_dropdown = CTkScrollableDropdown(self.ip_entry, values=server_aliases, command=self.on_home_server_selected,
+                              fg_color="#18181a", button_color="transparent", hover_color="#2b2b2f",
+                              frame_border_color="#333335", frame_corner_radius=8, text_color="white", alpha=1.0)
+
+        if not self.servers_data:
+            self.ip_entry.set("💡 Añade un servidor (Pestaña 'Servidores')")
+        else:
+            self.ip_entry.set("Selecciona un servidor...")
 
         self.home_card = ctk.CTkFrame(col0, fg_color="#18181a", border_width=1, border_color="#2b2b2f", corner_radius=8)
         
@@ -1353,16 +1501,16 @@ del "%~f0"
             values=steam_choices,
             height=36,
             font=self.font_text,
-            dropdown_font=self.font_text,
             fg_color="#1a1a1c",
             button_color="#1a1a1c",
-            button_hover_color="#2a2a2c",
-            dropdown_fg_color="#1e1e1f",
-            dropdown_hover_color="#2b2b2d",
-            command=self.on_steam_user_changed
+            button_hover_color="#2a2a2c"
         )
         self.steam_dropdown.set(default_choice)
         self.steam_dropdown.pack(fill="x")
+        
+        CTkScrollableDropdown(self.steam_dropdown, values=steam_choices, command=self.on_steam_user_changed,
+                              fg_color="#1e1e1f", button_color="transparent", hover_color="#2b2b2d",
+                              frame_border_color="#333335", frame_corner_radius=8, text_color="white", alpha=1.0)
         
         # Section 4: One-time checkbox
         self.one_time_var = tk.BooleanVar(value=self.settings.get("one_time_mode", False))
@@ -1380,15 +1528,28 @@ del "%~f0"
         )
         self.chk_one_time.pack(anchor="w", pady=(15, 10))
         
-        # Info box explaining how it works
-        info_card = ctk.CTkFrame(col0, fg_color="#18181b", border_width=1, border_color="#2b2b2f", corner_radius=8)
-        info_card.pack(fill="both", expand=True, pady=(15, 0))
+        # Section 5: Smart Wipe Mode
+        smart_wipe_frame = ctk.CTkFrame(col0, fg_color="transparent")
+        smart_wipe_frame.pack(fill="x", pady=(0, 10))
         
-        info_txt = ("¿Cómo funciona?\n"
-                    "Al encender el PC, Windows iniciará sesión de forma automática sin pedir contraseña "
-                    "y abrirá Steam para conectarse directamente a tu servidor de Rust. "
-                    "Ideal para saltarse las colas en wipe.")
-        ctk.CTkLabel(info_card, text=info_txt, font=self.font_small, text_color="#aaaaaa", justify="left", wraplength=260).pack(padx=12, pady=12)
+        self.smart_wipe_var = tk.BooleanVar(value=self.settings.get("smart_wipe", False))
+        self.chk_smart_wipe = ctk.CTkSwitch(
+            smart_wipe_frame,
+            text="Modo Wipe Inteligente",
+            variable=self.smart_wipe_var,
+            onvalue=True,
+            offvalue=False,
+            command=self._save_smart_wipe_setting,
+            font=self.font_text,
+            button_color=COLOR_RUST_RED,
+            button_hover_color="#b3241b",
+            progress_color="#441a18"
+        )
+        self.chk_smart_wipe.pack(side="left")
+        
+        # Info box explaining how it works (Moved to right column)
+        
+        # (Info box removed to keep UI clean and avoid squishing)
         
         # Column 1: System Status & Activation
         col1 = ctk.CTkFrame(home_page, fg_color="transparent")
@@ -1434,6 +1595,29 @@ del "%~f0"
         )
         self.pw_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
         Tooltip(self.pw_entry, "La contraseña del usuario de Windows para iniciar sesión de forma automática tras encender.")
+        
+        self.icon_eye = ctk.CTkImage(light_image=Image.open(get_asset_path("icons/eye.png")), size=(18, 18)) if os.path.exists(get_asset_path("icons/eye.png")) else None
+        self.icon_eye_off = ctk.CTkImage(light_image=Image.open(get_asset_path("icons/eye_off.png")), size=(18, 18)) if os.path.exists(get_asset_path("icons/eye_off.png")) else None
+        
+        def toggle_password():
+            if self.pw_entry.cget("show") == "*":
+                self.pw_entry.configure(show="")
+                btn_toggle_pw.configure(image=self.icon_eye_off)
+            else:
+                self.pw_entry.configure(show="*")
+                btn_toggle_pw.configure(image=self.icon_eye)
+                
+        btn_toggle_pw = ctk.CTkButton(
+            pw_frame,
+            text="",
+            image=self.icon_eye,
+            width=36,
+            height=36,
+            fg_color="#2b2b2b",
+            hover_color="#3b3b3b",
+            command=toggle_password
+        )
+        btn_toggle_pw.pack(side="left", padx=(0, 5))
         
         btn_verify_pw = ctk.CTkButton(
             pw_frame,
@@ -1500,6 +1684,273 @@ del "%~f0"
             command=self.test_connection
         )
         btn_test.pack(fill="x", pady=0)
+        
+        # Info Box (Bottom Right)
+        info_card = ctk.CTkFrame(col1, fg_color="#18181b", border_width=1, border_color="#2b2b2f", corner_radius=8)
+        info_card.pack(fill="both", expand=True, pady=(20, 0))
+        
+        info_txt = ("ℹ️ ¿Cómo funciona?\n\n"
+                    "Al encender el PC, se iniciará sesión automáticamente y Steam abrirá directamente el servidor elegido.\n\n"
+                    "💡 Modo Wipe Inteligente:\n"
+                    "Espera de forma invisible al reinicio del servidor y te conecta al milisegundo exacto.")
+        ctk.CTkLabel(info_card, text=info_txt, font=self.font_small, text_color="#888888", justify="left", wraplength=260).pack(padx=12, pady=12, anchor="nw")
+
+    def _run_snipe_thread(self, ip, lbl_status, btn_snipe, run_id=None):
+        import socket, time, subprocess
+        host = ip.split(":")[0] if ":" in ip else ip
+        port = int(ip.split(":")[1]) if ":" in ip else 28015
+        
+        def is_active():
+            return self.is_sniping and (run_id is None or getattr(self, 'snipe_run_id', None) == run_id)
+
+        # Fase 1: Esperar a que el servidor se apague
+        self.after(0, lambda: is_active() and lbl_status.configure(text="Fase 1: Esperando Wipe (Servidor Online...)", text_color="#aaaaaa"))
+        
+        def check_online():
+            for test_port in list(dict.fromkeys([port, port + 1, port + 15])):
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.settimeout(0.5)
+                try:
+                    sock.sendto(b'\xFF\xFF\xFF\xFFTSource Engine Query\x00', (host, test_port))
+                    data, _ = sock.recvfrom(4096)
+                    if data.startswith(b'\xFF\xFF\xFF\xFFI'):
+                        try:
+                            idx = 5
+                            for _ in range(4): idx = data.find(b'\x00', idx) + 1
+                            idx += 9
+                            idx = data.find(b'\x00', idx) + 1
+                            if idx < len(data):
+                                edf = data[idx]
+                                idx += 1
+                                if edf & 0x80:
+                                    import struct
+                                    reported_port = struct.unpack_from('<H', data, idx)[0]
+                                    if test_port != port and reported_port != port: 
+                                        continue
+                        except: pass
+                        return True
+                except Exception: pass
+                finally: sock.close()
+            return False
+
+        attempts = 0
+        was_online = False
+        if check_online():
+            was_online = True
+            failed_pings = 0
+            while is_active():
+                if not check_online():
+                    failed_pings += 1
+                    if failed_pings >= 3:
+                        break
+                else:
+                    failed_pings = 0
+                    
+                attempts += 1
+                self.after(0, lambda a=attempts: is_active() and lbl_status.configure(text=f"Fase 1: Esperando Wipe (Servidor Online...) | Intentos: {a}", text_color="#aaaaaa"))
+                time.sleep(3.0)
+                
+        if not is_active():
+            return
+            
+        # Fase 2: El servidor está offline.
+        self.after(0, lambda: is_active() and lbl_status.configure(text=f"Fase 2: Wipe en proceso. Esperando A2S...", text_color="#ffcc00"))
+        attempts = 0
+        while is_active():
+            attempts += 1
+            if check_online():
+                break
+                
+            msg = f"Fase 2: Wipe en proceso. Esperando A2S... | Pings: {attempts}"
+            self.after(0, lambda m=msg: is_active() and lbl_status.configure(text=m, text_color="#ffcc00"))
+            time.sleep(0.5)
+            
+        if not is_active():
+            return
+            
+        # Conectado!
+        self.is_sniping = False
+        self.after(0, lambda: lbl_status.configure(text="¡SERVIDOR ONLINE! Conectando en 0ms...", text_color="#00ff00"))
+        self.after(0, lambda: btn_snipe.configure(text="COMENZAR SPAM", fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER))
+        
+        try:
+            import winsound
+            winsound.Beep(1000, 300)
+            time.sleep(0.1)
+            winsound.Beep(1500, 600)
+        except: pass
+
+        try:
+            subprocess.Popen(['explorer.exe', f'steam://run/252490//+connect%20{ip}%20+aq%20{int(time.time())}'], creationflags=subprocess.CREATE_NO_WINDOW)
+            logger.info("Snipe Wipe: Conexión lanzada: %s", ip)
+        except Exception as e:
+            logger.error("Error al probar conexión: %s", e)
+            
+    def _test_snipe_connection(self):
+        raw_val = self.snipe_ip_entry.get().strip()
+        if not raw_val or raw_val == "Selecciona un servidor..." or "💡" in raw_val:
+            styled_showwarning(self, "Selecciona Servidor", "Por favor selecciona un servidor de la lista primero.")
+            return
+            
+        ip = raw_val
+        if ip in self.servers_data:
+            s_data = self.servers_data[ip]
+            if isinstance(s_data, dict):
+                ip = s_data.get("ip", "")
+            else:
+                ip = s_data
+                
+        if ip.startswith("client.connect"):
+            ip = ip[14:].strip()
+        elif ip.startswith("connect"):
+            ip = ip[7:].strip()
+            
+        if not ip or not IP_PORT_RE.match(ip):
+            styled_showwarning(self, "Formato incorrecto", f"La dirección '{ip}' no parece válida.")
+            return
+
+        import subprocess
+        try:
+            subprocess.Popen(['explorer.exe', f'steam://run/252490//+connect%20{ip}%20+aq%20{int(time.time())}'], creationflags=subprocess.CREATE_NO_WINDOW)
+            styled_showinfo(self, "Prueba de Conexión", f"Se ha enviado la petición a Steam para conectar a:\n{ip}\n\nRevisa Rust, debería estar conectándose al servidor.")
+        except Exception as e:
+            from tkinter import messagebox
+            messagebox.showerror("Error", f"No se pudo lanzar el juego:\n{e}")
+            
+    def _toggle_snipe(self, lbl_status, btn_snipe):
+        if getattr(self, 'is_sniping', False):
+            self.is_sniping = False
+            self.snipe_run_id = None
+            lbl_status.configure(text="Spam Cancelado.", text_color="#ff5555")
+            btn_snipe.configure(text="COMENZAR SPAM", fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER)
+            return
+
+        raw_val = self.snipe_ip_entry.get().strip()
+        if not raw_val or raw_val == "Selecciona un servidor..." or "💡" in raw_val:
+            styled_showwarning(self, "Selecciona Servidor", "Por favor selecciona un servidor de la lista primero.")
+            return
+            
+        ip = raw_val
+        if raw_val in self.servers_data:
+            data = self.servers_data[raw_val]
+            ip = data["ip"] if isinstance(data, dict) else data
+            
+        if ip.startswith("client.connect"):
+            ip = ip[14:].strip()
+        elif ip.startswith("connect"):
+            ip = ip[7:].strip()
+            
+        if not ip or not IP_PORT_RE.match(ip):
+            styled_showwarning(self, "Formato incorrecto", f"La dirección '{ip}' no parece válida.")
+            return
+
+        # Start sniping
+        self.is_sniping = True
+        import time
+        self.snipe_run_id = time.time()
+        lbl_status.configure(text="Iniciando motor de Spam...", text_color="#aaaaaa")
+        btn_snipe.configure(text="CANCELAR SPAM", fg_color="#ff5555", hover_color="#cc4444")
+        
+        import threading
+        self.snipe_thread = threading.Thread(target=self._run_snipe_thread, args=(ip, lbl_status, btn_snipe, self.snipe_run_id), daemon=True)
+        self.snipe_thread.start()
+
+    def create_snipe_page(self):
+        snipe_page = ctk.CTkFrame(self.container_frame, fg_color="transparent")
+        self.pages["snipe"] = snipe_page
+        
+        snipe_page.grid_columnconfigure(0, weight=1)
+        snipe_page.grid_rowconfigure(2, weight=1)
+        
+        # Header
+        header = ctk.CTkFrame(snipe_page, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
+        
+        lbl_title = ctk.CTkLabel(header, text="WIPE-SPAM", font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"), text_color=COLOR_RUST_RED)
+        lbl_title.pack(side="left")
+        
+        # Info Box
+        info_card = ctk.CTkFrame(snipe_page, fg_color="#18181b", border_width=1, border_color="#2b2b2f", corner_radius=8)
+        info_card.grid(row=1, column=0, sticky="ew", padx=20, pady=(10, 20))
+        
+        info_txt = ("⚡ ¿Qué es el Wipe-Spam?\n\n"
+                    "Esta herramienta está diseñada para usarse en vivo mientras estás frente a tu PC. "
+                    "Al activarla, bombardeará el servidor con pings invisibles cada pocos milisegundos. "
+                    "En el instante exacto en que el servidor reinicie por el wipe, la app lanzará la conexión en 0ms, "
+                    "permitiéndote saltarte la cola de espera y entrar de los primeros.\n\n"
+                    "💡 Recomendación: Ten el juego abierto en el menú principal para que la conexión sea instantánea.")
+        ctk.CTkLabel(info_card, text=info_txt, font=self.font_small, text_color="#aaaaaa", justify="left", wraplength=480).pack(padx=15, pady=15, anchor="nw")
+        
+        # Main controls
+        controls_frame = ctk.CTkFrame(snipe_page, fg_color="#141416", border_width=1, border_color="#2b2b2f", corner_radius=8)
+        controls_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        controls_frame.grid_columnconfigure(0, weight=1)
+        
+        ctk.CTkLabel(controls_frame, text="1. Selecciona tu Servidor Objetivo", font=ctk.CTkFont(size=14, weight="bold"), text_color="white").pack(pady=(30, 10))
+        
+        server_aliases = list(self.servers_data.keys())
+        if not server_aliases:
+            server_aliases = ["💡 Añade un servidor primero"]
+            
+        self.snipe_ip_entry = ctk.CTkOptionMenu(
+            controls_frame,
+            values=server_aliases,
+            height=45, width=300,
+            font=ctk.CTkFont(size=14),
+            fg_color="#101012",
+            button_color="#2b2b2b",
+            button_hover_color="#3b3b3b"
+        )
+        self.snipe_ip_entry.pack(pady=(0, 30))
+        
+        def on_snipe_server_selected(choice_str):
+            self.snipe_ip_entry.set(choice_str)
+            
+        self.snipe_dropdown = CTkScrollableDropdown(self.snipe_ip_entry, values=server_aliases, command=on_snipe_server_selected,
+                              fg_color="#18181a", button_color="transparent", hover_color="#2b2b2f",
+                              frame_border_color="#333335", frame_corner_radius=8, text_color="white", alpha=1.0)
+                              
+        if not self.servers_data:
+            self.snipe_ip_entry.set("💡 Añade un servidor primero")
+        else:
+            self.snipe_ip_entry.set("Selecciona un servidor...")
+            
+        # Status Radar
+        radar_frame = ctk.CTkFrame(controls_frame, fg_color="#0a0a0c", border_width=1, border_color="#1f1f22", corner_radius=8, height=80)
+        radar_frame.pack(fill="x", padx=40, pady=(10, 30))
+        radar_frame.pack_propagate(False)
+        
+        lbl_status = ctk.CTkLabel(radar_frame, text="Esperando objetivo...", font=ctk.CTkFont(family="Consolas", size=14), text_color="#555555")
+        lbl_status.pack(expand=True)
+        
+        button_frame = ctk.CTkFrame(controls_frame, fg_color="transparent")
+        button_frame.pack(pady=(0, 30))
+        
+        # Modo selector removido
+        
+        actions_frame = ctk.CTkFrame(button_frame, fg_color="transparent")
+        actions_frame.pack(side="top")
+        btn_snipe = ctk.CTkButton(
+            actions_frame,
+            text="COMENZAR SPAM",
+            height=55, width=160,
+            fg_color=COLOR_RUST_RED,
+            hover_color=COLOR_RUST_HOVER,
+            font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"),
+        )
+        btn_snipe.configure(command=lambda: self._toggle_snipe(lbl_status, btn_snipe))
+        btn_snipe.pack(side="left", padx=(0, 10))
+        
+        btn_test = ctk.CTkButton(
+            actions_frame,
+            text="PROBAR CONEXIÓN\n(RUST ABIERTO)",
+            height=55, width=130,
+            fg_color="#184a8c",
+            hover_color="#123768",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            command=self._test_snipe_connection
+        )
+        btn_test.pack(side="left")
 
     def create_servers_page(self):
         servers_page = ctk.CTkFrame(self.container_frame, fg_color="transparent")
@@ -1533,8 +1984,11 @@ del "%~f0"
         btn_add = ctk.CTkButton(form_frame, text="Añadir", font=self.font_label, fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER, height=32, command=self.add_new_server_inline)
         btn_add.grid(row=1, column=2, sticky="e", padx=(5, 12), pady=(0, 12))
         
+        disclaimer_lbl = ctk.CTkLabel(form_frame, text="💡 Consejo: Si la app identifica un servidor erróneo o no carga la imagen,\nasegúrate de incluir el puerto numérico al final de la IP o dominio (ej. :28024).", font=ctk.CTkFont(size=11, slant="italic"), text_color="#cccccc", justify="left")
+        disclaimer_lbl.grid(row=2, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 10))
+        
         btn_explore = ctk.CTkButton(form_frame, text="🔍 Explorar Servidores Destacados", font=self.font_label, fg_color="#2b2b2b", hover_color="#3b3b3b", border_width=1, border_color="#444", height=32, command=self.open_featured_servers_modal)
-        btn_explore.grid(row=2, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 12))
+        btn_explore.grid(row=3, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 12))
         
         form_frame.grid_columnconfigure(0, weight=1)
         form_frame.grid_columnconfigure(1, weight=1)
@@ -1587,13 +2041,13 @@ del "%~f0"
         self.new_ip_entry.delete(0, 'end')
         
         self.refresh_server_list(self.pages["servers"])
-        styled_showinfo(self, "Servidor Añadido", f"¡El servidor '{alias}' ha sido añadido correctamente!")
+        ToastNotification.show(self, f"Servidor añadido: {alias}")
 
     def open_featured_servers_modal(self):
-        modal = tk.Toplevel(self)
+        modal = ctk.CTkToplevel(self)
         modal.title("Servidores Destacados")
         modal.geometry("600x500")
-        modal.configure(bg="#121212")
+        modal.configure(fg_color="#121212")
         modal.transient(self)
         modal.grab_set()
 
@@ -1619,7 +2073,7 @@ del "%~f0"
             self.servers_data[srv_alias] = {"ip": srv_ip, "fav": False}
             self.save_servers()
             self.refresh_server_list(self.pages.get("servers", self))
-            styled_showinfo(modal, "Añadido", f"¡{srv_alias} añadido con éxito!")
+            ToastNotification.show(modal, f"Añadido: {srv_alias}")
 
         for srv in FEATURED_SERVERS:
             row_frame = ctk.CTkFrame(scroll, fg_color="#1a1a1c", border_width=1, border_color="#2b2b2f", corner_radius=8)
@@ -1635,12 +2089,44 @@ del "%~f0"
             btn.pack(side="right", padx=15)
 
     def refresh_server_list(self, w):
+        # Update home dropdown if it exists
+        if hasattr(self, 'ip_dropdown') and hasattr(self, 'ip_entry'):
+            aliases = list(self.servers_data.keys())
+            if not aliases:
+                self.ip_dropdown.configure(values=["💡 Añade un servidor (Pestaña 'Servidores')"])
+                self.ip_entry.configure(values=["💡 Añade un servidor (Pestaña 'Servidores')"])
+                self.ip_entry.set("💡 Añade un servidor (Pestaña 'Servidores')")
+                if hasattr(self, 'snipe_dropdown') and hasattr(self, 'snipe_ip_entry'):
+                    self.snipe_dropdown.configure(values=["💡 Añade un servidor primero"])
+                    self.snipe_ip_entry.configure(values=["💡 Añade un servidor primero"])
+                    self.snipe_ip_entry.set("💡 Añade un servidor primero")
+            else:
+                self.ip_dropdown.configure(values=aliases)
+                self.ip_entry.configure(values=aliases)
+                if self.ip_entry.get() not in aliases:
+                    self.ip_entry.set("Selecciona un servidor...")
+                if hasattr(self, 'snipe_dropdown') and hasattr(self, 'snipe_ip_entry'):
+                    self.snipe_dropdown.configure(values=aliases)
+                    self.snipe_ip_entry.configure(values=aliases)
+                    if self.snipe_ip_entry.get() not in aliases:
+                        self.snipe_ip_entry.set("Selecciona un servidor...")
+
         for widget in self.scroll_servers.winfo_children():
             widget.destroy()
             
         if not self.servers_data:
-            empty_lbl = ctk.CTkLabel(self.scroll_servers, text="Aún no tienes ningún servidor guardado en tu lista.\nAñade el primero usando el formulario de arriba.", text_color="#777777")
-            empty_lbl.pack(pady=40)
+            empty_frame = ctk.CTkFrame(self.scroll_servers, fg_color="transparent")
+            empty_frame.pack(expand=True, fill="both", pady=40)
+            
+            icon_lbl = ctk.CTkLabel(empty_frame, text="\uE83B", font=ctk.CTkFont(family="Segoe UI", size=48), text_color="#333333")
+            icon_lbl.pack(pady=(20, 10))
+            
+            empty_lbl = ctk.CTkLabel(empty_frame, text="Aún no tienes ningún servidor guardado.\nAñade el primero usando el formulario superior.", text_color="#777777", font=self.font_text)
+            empty_lbl.pack()
+            
+            btn_featured = ctk.CTkButton(empty_frame, text="Explorar Destacados", fg_color="#2b2b2b", hover_color="#3b3b3b", command=self.open_featured_servers_modal)
+            btn_featured.pack(pady=20)
+            
             if hasattr(self, 'lbl_server_count') and self.lbl_server_count.winfo_exists():
                 self.lbl_server_count.configure(text="0 servidores")
             return
@@ -1724,8 +2210,15 @@ del "%~f0"
                 else:
                     self.switch_page("home")
             
-            btn_join = ctk.CTkButton(action_frame, text="SELECCIONAR SERVIDOR" if not is_active else "SERVIDOR ACTIVO", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"), height=42, fg_color=COLOR_RUST_RED if not is_active else "#28a745", hover_color=COLOR_RUST_HOVER if not is_active else "#218838", command=select_cmd)
-            btn_join.pack(fill="x")
+            btn_join = ctk.CTkButton(action_frame, text="SELECCIONAR SERVIDOR" if not is_active else "SERVIDOR ACTIVO", font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"), height=40, fg_color=COLOR_RUST_RED if not is_active else "#28a745", hover_color=COLOR_RUST_HOVER if not is_active else "#218838", command=select_cmd)
+            btn_join.pack(side="left", fill="x", expand=True, padx=(0, 5))
+            
+            def manual_smart_wipe_cmd(target_alias=alias):
+                self.snipe_ip_entry.set(target_alias)
+                self.switch_page("snipe")
+
+            btn_smart = ctk.CTkButton(action_frame, text="ESPERAR WIPE", font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"), height=40, width=110, fg_color="#184a8c", hover_color="#123768", command=manual_smart_wipe_cmd)
+            btn_smart.pack(side="right")
             
             # --- BOTTOM SECTION (Copy IP, Delete, Edit, Ping) ---
             bottom_frame = ctk.CTkFrame(card, fg_color="transparent")
@@ -1734,7 +2227,7 @@ del "%~f0"
             def copy_cmd(target_ip=ip):
                 self.clipboard_clear()
                 self.clipboard_append(target_ip)
-                styled_showinfo(self, "Copiado", f"IP '{target_ip}' copiada al portapapeles.")
+                ToastNotification.show(self, "IP copiada al portapapeles")
             
             def edit_cmd(target_alias=alias, window=w):
                 self._edit_server_alias(target_alias, window)
@@ -1776,45 +2269,47 @@ del "%~f0"
             port = int(ip.split(":")[1]) if ":" in ip else 28015
             
             a2s_data = None
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(2.0)
-            try:
-                sock.sendto(b'\xFF\xFF\xFF\xFFTSource Engine Query\x00', (host, port))
-                data, _ = sock.recvfrom(4096)
-                if data.startswith(b'\xFF\xFF\xFF\xFFI'):
-                    data_slice = data[5:]
-                    protocol = data_slice[0]
-                    data_slice = data_slice[1:]
-                    name_end = data_slice.find(b'\x00')
-                    name = data_slice[:name_end].decode('utf-8', errors='ignore')
-                    
-                    # Extraer jugadores via regex para evitar el overflow del byte de Rust
-                    cp_m = re.search(rb'cp(\d+)', data)
-                    mp_m = re.search(rb'mp(\d+)', data)
-                    qp_m = re.search(rb'qp(\d+)', data)
+            for test_port in list(dict.fromkeys([port, port + 1, port + 15])):
+                if a2s_data is not None: break
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.settimeout(1.0)
+                try:
+                    sock.sendto(b'\xFF\xFF\xFF\xFFTSource Engine Query\x00', (host, test_port))
+                    data, _ = sock.recvfrom(4096)
+                    if data.startswith(b'\xFF\xFF\xFF\xFFI'):
+                        data_slice = data[5:]
+                        protocol = data_slice[0]
+                        data_slice = data_slice[1:]
+                        name_end = data_slice.find(b'\x00')
+                        name = data_slice[:name_end].decode('utf-8', errors='ignore')
+                        
+                        # Extraer jugadores via regex para evitar el overflow del byte de Rust
+                        cp_m = re.search(rb'cp(\d+)', data)
+                        mp_m = re.search(rb'mp(\d+)', data)
+                        qp_m = re.search(rb'qp(\d+)', data)
 
-                    cp = int(cp_m.group(1)) if cp_m else -1
-                    mp = int(mp_m.group(1)) if mp_m else -1
-                    qp = int(qp_m.group(1)) if qp_m else 0
+                        cp = int(cp_m.group(1)) if cp_m else -1
+                        mp = int(mp_m.group(1)) if mp_m else -1
+                        qp = int(qp_m.group(1)) if qp_m else 0
 
-                    if cp == -1 or mp == -1:
-                        # Fallback estandar
-                        import struct
-                        data_slice = data_slice[name_end+1:]
-                        data_slice = data_slice[data_slice.find(b'\x00')+1:]
-                        data_slice = data_slice[data_slice.find(b'\x00')+1:]
-                        data_slice = data_slice[data_slice.find(b'\x00')+1:]
-                        app_id, cp, mp, bots = struct.unpack('<HBBb', data_slice[:5])
+                        if cp == -1 or mp == -1:
+                            # Fallback estandar
+                            import struct
+                            data_slice = data_slice[name_end+1:]
+                            data_slice = data_slice[data_slice.find(b'\x00')+1:]
+                            data_slice = data_slice[data_slice.find(b'\x00')+1:]
+                            data_slice = data_slice[data_slice.find(b'\x00')+1:]
+                            app_id, cp, mp, bots = struct.unpack('<HBBb', data_slice[:5])
 
-                    players_text = f"{cp}/{mp} PLAYERS"
-                    if qp > 0:
-                        players_text += f" (+{qp} EN COLA)"
+                        players_text = f"{cp}/{mp} PLAYERS"
+                        if qp > 0:
+                            players_text += f" (+{qp} EN COLA)"
 
-                    a2s_data = {"name": name, "players_text": players_text}
-            except Exception:
-                pass
-            finally:
-                sock.close()
+                        a2s_data = {"name": name, "players_text": players_text}
+                except Exception:
+                    pass
+                finally:
+                    sock.close()
 
             # Now ping
             is_online = False
@@ -1840,7 +2335,7 @@ del "%~f0"
                 import urllib.request, json
                 from datetime import datetime, timezone
                 bm_ip = socket.gethostbyname(host)
-                url = f"https://api.battlemetrics.com/servers?filter[search]={bm_ip}"
+                url = f"https://api.battlemetrics.com/servers?filter[search]={bm_ip}&page[size]=100"
                 req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
                 res = urllib.request.urlopen(req, timeout=2.0)
                 bm_data = json.loads(res.read())
@@ -1848,9 +2343,12 @@ del "%~f0"
                 pil_image = None
                 if bm_data.get('data'):
                     wipe_str = None
+                    test_ports = list(dict.fromkeys([port, port + 1, port + 15, 28015]))
                     for srv in bm_data['data']:
                         attrs = srv.get('attributes', {})
-                        if attrs.get('ip') == bm_ip and attrs.get('status') == 'online':
+                        s_port = attrs.get('port')
+                        s_qport = attrs.get('portQuery')
+                        if attrs.get('ip') == bm_ip and attrs.get('status') == 'online' and (s_port in test_ports or s_qport in test_ports):
                             wipe_str = attrs.get('details', {}).get('rust_last_wipe')
                             bm_full_name = attrs.get('name')
                             img_url = attrs.get('details', {}).get('rust_headerimage')
@@ -1928,8 +2426,11 @@ del "%~f0"
                         lbl_players.configure(text="--/-- PLAYERS")
                         lbl_wipe.configure(text="")
                         
-                    if is_online or a2s_data:
+                    if a2s_data:
                         status_badge.configure(text=" ACTIVE ● ", fg_color="#28a745", text_color="white")
+                        lbl_ping.configure(text=f"Ping: {ms}ms" if ms else "Ping: <1ms")
+                    elif is_online:
+                        status_badge.configure(text=" HOST OK ", fg_color="#e8a020", text_color="white")
                         lbl_ping.configure(text=f"Ping: {ms}ms" if ms else "Ping: <1ms")
                     else:
                         status_badge.configure(text=" OFFLINE ", fg_color="#dc3545", text_color="white")
@@ -1949,13 +2450,28 @@ del "%~f0"
         threading.Thread(target=do_fetch, daemon=True).start()
 
     def _edit_server_alias(self, old_alias, window):
-        new_alias = styled_input(self, "Renombrar Servidor", f"Nuevo nombre para '{old_alias}':", placeholder="Nuevo alias")
-        if new_alias and new_alias.strip() and new_alias.strip() != old_alias:
-            new_alias = new_alias.strip()
-            ip = self.servers_data.pop(old_alias)
-            self.servers_data[new_alias] = ip
-            self.save_servers()
-            self.refresh_server_list(window)
+        server_obj = self.servers_data.get(old_alias)
+        old_ip = server_obj.get("ip", "") if isinstance(server_obj, dict) else server_obj
+        
+        new_alias = styled_input(self, "Editar Servidor", f"Editar alias de '{old_alias}':", placeholder="Nuevo alias", initial_value=old_alias)
+        if new_alias is None: return
+        new_alias = new_alias.strip()
+        if not new_alias: return
+        
+        new_ip = styled_input(self, "Editar IP", f"Editar IP o Dominio para '{new_alias}':", placeholder="IP:Puerto", initial_value=old_ip)
+        if new_ip is None: return
+        new_ip = new_ip.strip()
+        if not new_ip: return
+        
+        server_obj = self.servers_data.pop(old_alias)
+        if isinstance(server_obj, dict):
+            server_obj["ip"] = new_ip
+            self.servers_data[new_alias] = server_obj
+        else:
+            self.servers_data[new_alias] = new_ip
+            
+        self.save_servers()
+        self.refresh_server_list(window)
 
     def _export_servers(self):
         """Exporta la lista de servidores a un archivo JSON."""
@@ -1974,7 +2490,7 @@ del "%~f0"
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump(self.servers_data, f, indent=4, ensure_ascii=False)
                 logger.info("Servidores exportados a: %s (%d servidores)", path, len(self.servers_data))
-                styled_showinfo(self, "Éxito", f"Se han exportado {len(self.servers_data)} servidor(es) correctamente.")
+                ToastNotification.show(self, f"Exportados {len(self.servers_data)} servidores")
             except Exception as e:
                 styled_showerror(self, "Error", f"No se pudo exportar: {e}")
 
@@ -2104,7 +2620,7 @@ del "%~f0"
             self.check_status()
             if not silent:
                 logger.info("Despertador cancelado")
-                styled_showinfo(self, "Cancelado", "Despertador cancelado correctamente.")
+                ToastNotification.show(self, "Despertador cancelado")
         except Exception as e:
             logger.error("Error cancelando despertador: %s", e)
             if not silent:
@@ -2169,11 +2685,17 @@ del "%~f0"
         self.combo_h = ctk.CTkOptionMenu(time_frame, values=[f"{i:02d}" for i in range(24)], width=70, fg_color="#1a1a1c", button_color="#1a1a1c", button_hover_color="#2a2a2c")
         self.combo_h.set("09")
         self.combo_h.pack(side="left", padx=5)
+        CTkScrollableDropdown(self.combo_h, values=[f"{i:02d}" for i in range(24)],
+                              fg_color="#1e1e1f", button_color="transparent", hover_color="#2b2b2d",
+                              frame_border_color="#333335", frame_corner_radius=8, text_color="white", alpha=1.0)
         
         ctk.CTkLabel(time_frame, text="Min:", font=self.font_label).pack(side="left", padx=5)
         self.combo_m = ctk.CTkOptionMenu(time_frame, values=[f"{i:02d}" for i in range(60)], width=70, fg_color="#1a1a1c", button_color="#1a1a1c", button_hover_color="#2a2a2c")
         self.combo_m.set("30")
         self.combo_m.pack(side="left", padx=5)
+        CTkScrollableDropdown(self.combo_m, values=[f"{i:02d}" for i in range(60)],
+                              fg_color="#1e1e1f", button_color="transparent", hover_color="#2b2b2d",
+                              frame_border_color="#333335", frame_corner_radius=8, text_color="white", alpha=1.0)
         
         btn_prog = ctk.CTkButton(t3, text="Programar Despertador", font=self.font_label, fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER,
                                 command=lambda: self.create_wake_task(self.combo_h.get(), self.combo_m.get()))
@@ -2297,6 +2819,41 @@ del "%~f0"
         self.refresh_log_viewer()
         self.auto_refresh_logs()
         
+    def create_discord_page(self):
+        discord_page = ctk.CTkFrame(self.container_frame, fg_color="transparent")
+        self.pages["discord"] = discord_page
+        
+        discord_page.grid_columnconfigure(0, weight=1)
+        discord_page.grid_rowconfigure(0, weight=1)
+        
+        # Inner Frame
+        inner = ctk.CTkFrame(discord_page, fg_color="#18191c", corner_radius=15, border_width=1, border_color="#5865F2")
+        inner.grid(row=0, column=0, padx=40, pady=40, sticky="nsew")
+        
+        inner.grid_columnconfigure(0, weight=1)
+        inner.grid_rowconfigure((0, 1, 2, 3, 4), weight=1)
+        
+        icon_lbl = ctk.CTkLabel(inner, text="\uE8F2", font=ctk.CTkFont(family="Segoe UI", size=64), text_color="#5865F2")
+        icon_lbl.grid(row=1, column=0, pady=(0, 0))
+        
+        title = ctk.CTkLabel(inner, text="UNIRSE AL DISCORD", font=ctk.CTkFont(size=28, weight="bold"), text_color="white")
+        title.grid(row=2, column=0, pady=(10, 0), sticky="n")
+        
+        desc = ctk.CTkLabel(inner, text="Únete a la comunidad oficial.\nRecibe soporte técnico, enterate de actualizaciones\ny participa en el desarrollo de la herramienta.", font=ctk.CTkFont(size=15), text_color="#aaaaaa")
+        desc.grid(row=3, column=0, pady=0, sticky="n")
+        
+        import webbrowser
+        btn_join = ctk.CTkButton(
+            inner, 
+            text="Abrir Discord", 
+            fg_color="#5865F2", 
+            hover_color="#4752C4", 
+            font=ctk.CTkFont(size=15, weight="bold"), 
+            height=45, 
+            width=200, 
+            command=lambda: webbrowser.open("https://discord.com/")
+        )
+        btn_join.grid(row=4, column=0, pady=(0, 20), sticky="n")
     def auto_refresh_logs(self):
         if hasattr(self, 'pages') and self.pages.get("logs") and self.pages["logs"].winfo_exists():
             try:
@@ -2371,11 +2928,13 @@ del "%~f0"
             return
             
         for pid, btn in self.nav_buttons.items():
+            bar = self.nav_bars.get(pid)
             if pid == page_id:
-                btn.configure(fg_color=COLOR_RUST_RED, text_color="white", hover_color=COLOR_RUST_HOVER)
+                btn.configure(fg_color="#2b2b2b", text_color="white", hover_color="#333333")
+                if bar: bar.configure(fg_color=COLOR_RUST_RED)
             else:
-                btn.configure(fg_color="transparent", text_color="#aaaaaa", hover_color="#2b2b2b")
-                
+                btn.configure(fg_color="transparent", text_color="#aaaaaa", hover_color="#1a1a1c")
+                if bar: bar.configure(fg_color="transparent")
         old_page = self.pages.get(self.active_page)
         new_page = self.pages.get(page_id)
         
@@ -2390,8 +2949,8 @@ del "%~f0"
         new_page.lift()
         new_page.place(relx=1.0, rely=0.0, relwidth=1.0, relheight=1.0)
         
-        steps = 10
-        step_duration = 12
+        steps = 20
+        step_duration = 16 # approx 60 FPS
         
         def animate(step):
             if not new_page.winfo_exists():
@@ -2402,14 +2961,94 @@ del "%~f0"
                     old_page.place_forget()
                 return
             progress = step / steps
-            factor = progress * (2.0 - progress)
+            # Cubic ease out para un deslizamiento muy elegante
+            factor = 1.0 - (1.0 - progress) ** 3
             current_x = 1.0 - factor
             new_page.place(relx=current_x, rely=0.0, relwidth=1.0, relheight=1.0)
             self.after(step_duration, lambda: animate(step + 1))
             
         animate(1)
 
+def run_smart_wipe_daemon(ip):
+    """Monitor in background for wipe restarts."""
+    import time, socket, re, subprocess, logging, sys
+    
+    logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format="%(asctime)s [WIPE_DAEMON] %(message)s")
+    logger = logging.getLogger("SmartWipe")
+    
+    logger.info("Iniciando Smart Wipe Daemon para IP: %s", ip)
+    
+    host = ip.split(":")[0] if ":" in ip else ip
+    port = int(ip.split(":")[1]) if ":" in ip else 28015
+    
+    def check_online():
+        for test_port in list(dict.fromkeys([port, port + 1, port + 15])):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(1.5)
+            try:
+                sock.sendto(b'\xFF\xFF\xFF\xFFTSource Engine Query\x00', (host, test_port))
+                data, _ = sock.recvfrom(4096)
+                if data.startswith(b'\xFF\xFF\xFF\xFFI'):
+                    try:
+                        idx = 5
+                        for _ in range(4): idx = data.find(b'\x00', idx) + 1
+                        idx += 9
+                        idx = data.find(b'\x00', idx) + 1
+                        if idx < len(data):
+                            edf = data[idx]
+                            idx += 1
+                            if edf & 0x80:
+                                import struct
+                                reported_port = struct.unpack_from('<H', data, idx)[0]
+                                if test_port != port and reported_port != port: 
+                                    continue
+                    except: pass
+                    return True
+            except Exception: pass
+            finally: sock.close()
+        return False
+
+    # Fase 1: Esperar a que el servidor SE APAGUE
+    logger.info("Fase 1: Comprobando estado actual...")
+    
+    if check_online():
+        logger.info("El servidor está ONLINE. Esperando a que se APAGUE para el wipe...")
+        failed_pings = 0
+        while True:
+            if not check_online():
+                failed_pings += 1
+                if failed_pings >= 3:
+                    break
+            else:
+                failed_pings = 0
+            time.sleep(4.0)
+    
+    logger.info("El servidor está OFFLINE. (Wipe en proceso...)")
+    
+    # Fase 2: Esperar a que vuelva ONLINE
+    logger.info("Fase 2: Esperando a que el servidor vuelva a estar ONLINE...")
+    
+    while True:
+        if check_online():
+            break
+        time.sleep(1.0)
+        
+    logger.info("¡SERVIDOR ONLINE! Lanzando Rust inmediatamente...")
+    
+    try:
+        import winsound
+        winsound.Beep(1000, 300)
+        time.sleep(0.1)
+        winsound.Beep(1500, 600)
+    except: pass
+
+    subprocess.Popen(['explorer.exe', f'steam://run/252490//+connect%20{ip}%20+aq%20{int(time.time())}'], creationflags=subprocess.CREATE_NO_WINDOW)
+    logger.info("Misión cumplida. Cerrando daemon.")
+    sys.exit(0)
 
 if __name__ == "__main__":
-    app = App()
-    app.mainloop()
+    if len(sys.argv) > 2 and sys.argv[1] == "--smart-wipe":
+        run_smart_wipe_daemon(sys.argv[2])
+    else:
+        app = App()
+        app.mainloop()
