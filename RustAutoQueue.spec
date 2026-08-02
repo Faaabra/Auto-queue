@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('rust.ico', '.')],
+    datas=[('rust.ico', '.'), ('icons', 'icons'), ('assets', 'assets')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

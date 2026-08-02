@@ -9,6 +9,69 @@ import json
 import re
 import tkinter as tk
 import winreg
+
+# =========================================================
+# SMOOTH SCROLL PATCH PARA CUSTOMTKINTER
+# =========================================================
+
+def apply_smooth_scroll():
+    original_wheel = ctk.CTkScrollableFrame._mouse_wheel_all
+    
+    def _smooth_mouse_wheel(self, event):
+        if self.check_if_master_is_canvas(event.widget):
+            import sys
+            if self._shift_pressed:
+                original_wheel(self, event)
+                return
+                
+            if sys.platform.startswith("win"):
+                clicks = int(event.delta / 120)
+            else:
+                clicks = int(event.delta)
+                
+            if clicks == 0: return
+            direction = -1 if clicks > 0 else 1
+            
+            if not hasattr(self, "_scroll_queue"):
+                self._scroll_queue = 0
+            
+            # Sumar 20 unidades de scroll por click de rueda (más distancia)
+            self._scroll_queue += direction * abs(clicks) * 20
+            
+            if getattr(self, "_scroll_active", False):
+                return
+                
+            self._scroll_active = True
+            
+            def run_scroll():
+                if not self.winfo_exists(): return
+                if self._scroll_queue == 0:
+                    self._scroll_active = False
+                    return
+                
+                # Calcular velocidad: más rápido cuanta más cola haya
+                queue_abs = abs(self._scroll_queue)
+                step = 1 if self._scroll_queue > 0 else -1
+                
+                if queue_abs > 30: step *= 6
+                elif queue_abs > 15: step *= 3
+                elif queue_abs > 5: step *= 2
+                
+                # Ajustar para no pasarnos
+                if abs(step) > queue_abs: step = self._scroll_queue
+                
+                if self._parent_canvas.yview() != (0.0, 1.0):
+                    self._parent_canvas.yview("scroll", step, "units")
+                    
+                self._scroll_queue -= step
+                self.after(10, run_scroll)
+                
+            run_scroll()
+
+    ctk.CTkScrollableFrame._mouse_wheel_all = _smooth_mouse_wheel
+
+apply_smooth_scroll()
+# =========================================================
 import threading
 import urllib.request
 import urllib.error
@@ -129,25 +192,198 @@ class Tooltip:
 class ToastNotification:
     """
     Notificación flotante no-bloqueante (Toast)
-    Aparece en la esquina inferior derecha y desaparece tras unos segundos.
+    Aparece en la esquina inferior derecha con animación de slide.
     """
     @staticmethod
-    def show(parent, message, duration=2500):
-        # Crear un frame flotante superior
-        toast = ctk.CTkFrame(parent, fg_color="#2b2b2b", corner_radius=6, border_color="#3a3a3c", border_width=1)
-        
-        lbl = ctk.CTkLabel(toast, text=message, font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"), text_color="white")
-        lbl.pack(padx=20, pady=10)
-        
-        # Posicionar en la esquina inferior derecha, por encima de todo
-        toast.place(relx=0.95, rely=0.95, anchor="se")
-        toast.lift()
-        
-        def _hide():
-            try: toast.destroy()
-            except: pass
+    def show(parent, message, toast_type="success", duration=3000):
+        try:
+            colors = {
+                "success": "#28a745",
+                "info": "#4db8ff",
+                "error": "#ce422b",
+                "warning": "#ffcc00"
+            }
+            color = colors.get(toast_type, "#28a745")
+            icons = {
+                "success": "✓",
+                "info": "ℹ",
+                "error": "✗",
+                "warning": "⚠"
+            }
+            icon = icons.get(toast_type, "✓")
             
-        parent.after(duration, _hide)
+            toast = ctk.CTkFrame(parent, fg_color="#1a1a1c", corner_radius=8, border_color=color, border_width=1)
+            
+            lbl_icon = ctk.CTkLabel(toast, text=icon, font=ctk.CTkFont(size=14, weight="bold"), text_color=color)
+            lbl_icon.pack(side="left", padx=(15, 5), pady=10)
+            
+            lbl_text = ctk.CTkLabel(toast, text=message, font=ctk.CTkFont(family="Segoe UI", size=13), text_color="white")
+            lbl_text.pack(side="left", padx=(0, 15), pady=10)
+            
+            toast.lift()
+            
+            steps = 15
+            start_y = 1.05
+            end_y = 0.95
+            
+            def slide_in(step=0):
+                if not toast.winfo_exists(): return
+                progress = step / steps
+                current_y = start_y - (start_y - end_y) * (1.0 - (1.0 - progress)**3)
+                toast.place(relx=0.95, rely=current_y, anchor="se")
+                
+                if step < steps:
+                    parent.after(16, lambda: slide_in(step + 1))
+                else:
+                    parent.after(duration, slide_out)
+                    
+            def slide_out(step=0):
+                if not toast.winfo_exists(): return
+                progress = step / steps
+                current_y = end_y + (start_y - end_y) * (progress**2)
+                toast.place(relx=0.95, rely=current_y, anchor="se")
+                
+                if step < steps:
+                    parent.after(16, lambda: slide_out(step + 1))
+                else:
+                    toast.destroy()
+                    
+            slide_in()
+        except Exception as e:
+            pass
+
+
+class RadarCanvas(tk.Canvas):
+    """
+    Radar visual animado para el Wipe-Spam.
+    Estados: 'idle', 'waiting_offline', 'offline', 'connecting'
+    """
+    # Paleta de colores por estado
+    STATE_COLORS = {
+        'idle':            {'arc': '#444447', 'glow': '#2a2a2c', 'text': '#555558', 'pulse': '#444447'},
+        'waiting_offline': {'arc': '#e07b39', 'glow': '#3a2010', 'text': '#e07b39', 'pulse': '#c06020'},
+        'offline':         {'arc': '#cc2222', 'glow': '#2a0808', 'text': '#ff4444', 'pulse': '#ff2222'},
+        'connecting':      {'arc': '#22cc55', 'glow': '#082a12', 'text': '#22ff66', 'pulse': '#00ff44'},
+    }
+    STATE_LABELS = {
+        'idle':            'Esperando objetivo...',
+        'waiting_offline': 'Fase 1 — Servidor ONLINE, esperando wipe...',
+        'offline':         'Fase 2 — WIPE EN PROCESO — Escaneando...',
+        'connecting':      '¡SERVIDOR ONLINE! Conectando en 0ms...',
+    }
+
+    def __init__(self, parent, size=120, **kwargs):
+        super().__init__(parent, width=size, height=size,
+                         bg='#0a0a0c', highlightthickness=0, **kwargs)
+        self.size = size
+        self.cx = size / 2
+        self.cy = size / 2
+        self.r_outer = size / 2 - 8
+        self.r_inner = self.r_outer - 10
+        self._state = 'idle'
+        self._angle = 0
+        self._pulse_alpha = 0
+        self._pulse_dir = 1
+        self._running = True
+        self._counter_label = None
+        self._counter_text = ''
+        self._animate()
+
+    def set_state(self, state, extra_text=''):
+        self._state = state
+        self._counter_text = extra_text
+
+    def stop(self):
+        self._running = False
+
+    def _hex_blend(self, c1, c2, t):
+        """Blend two hex colors by factor t (0..1)."""
+        try:
+            r1,g1,b1 = int(c1[1:3],16), int(c1[3:5],16), int(c1[5:7],16)
+            r2,g2,b2 = int(c2[1:3],16), int(c2[3:5],16), int(c2[5:7],16)
+            r = int(r1 + (r2-r1)*t)
+            g = int(g1 + (g2-g1)*t)
+            b = int(b1 + (b2-b1)*t)
+            return f'#{r:02x}{g:02x}{b:02x}'
+        except:
+            return c1
+
+    def _animate(self):
+        if not self._running:
+            return
+        try:
+            self.winfo_exists()
+        except:
+            return
+
+        colors = self.STATE_COLORS.get(self._state, self.STATE_COLORS['idle'])
+        label  = self.STATE_LABELS.get(self._state, '')
+        s = self.size
+        cx, cy = self.cx, self.cy
+        ro, ri = self.r_outer, self.r_inner
+
+        self.delete('all')
+
+        # Glow background circle
+        glow_r = ro + 4
+        self.create_oval(cx-glow_r, cy-glow_r, cx+glow_r, cy+glow_r,
+                         fill=colors['glow'], outline='')
+
+        # Background ring
+        self.create_oval(cx-ro, cy-ro, cx+ro, cy+ro,
+                         outline='#222224', width=10, fill='#0a0a0c')
+
+        # Spinning arc (sweep 120°)
+        self.create_arc(cx-ro, cy-ro, cx+ro, cy+ro,
+                        start=self._angle, extent=120,
+                        outline=colors['arc'], width=10,
+                        style='arc')
+
+        # Pulse ring when offline
+        if self._state in ('offline', 'connecting'):
+            self._pulse_alpha += 0.06 * self._pulse_dir
+            if self._pulse_alpha >= 1.0:
+                self._pulse_dir = -1
+            elif self._pulse_alpha <= 0.0:
+                self._pulse_dir = 1
+            p_color = self._hex_blend('#0a0a0c', colors['pulse'], self._pulse_alpha)
+            pr = ro - 5
+            self.create_oval(cx-pr, cy-pr, cx+pr, cy+pr,
+                             outline=p_color, width=2, fill='')
+
+        # Ping lines (3 equidistant)
+        import math
+        for i in range(3):
+            a = math.radians(self._angle + i*120)
+            x1 = cx + (ri-4) * math.cos(a)
+            y1 = cy - (ri-4) * math.sin(a)
+            x2 = cx + (ri+2) * math.cos(a)
+            y2 = cy - (ri+2) * math.sin(a)
+            self.create_line(x1,y1,x2,y2, fill=colors['arc'], width=2)
+
+        # Counter text in center (small)
+        if self._counter_text:
+            # Puntito pequeño para no tapar el texto
+            cd = 2
+            self.create_oval(cx-cd, cy-cd, cx+cd, cy+cd,
+                             fill=colors['arc'], outline='')
+            self.create_text(cx, cy+2, text=self._counter_text,
+                             fill=colors['text'],
+                             font=('Consolas', 9, 'bold'))
+        else:
+            # Punto grande en idle
+            cd = 6
+            self.create_oval(cx-cd, cy-cd, cx+cd, cy+cd,
+                             fill=colors['arc'], outline='')
+
+        self._angle = (self._angle + 4) % 360
+
+        try:
+            self.after(16, self._animate)  # ~60fps
+        except:
+            pass
+
+
 class StyledDialog(ctk.CTkToplevel):
     """
     Diálogo modal personalizado con estilo oscuro premium.
@@ -350,19 +586,19 @@ class StyledDialog(ctk.CTkToplevel):
         return self._input_value
 
 
-def styled_showinfo(parent, title, message):
+def styled_showinfo(parent, title, message, **kwargs):
     """Show a styled info dialog. Replaces messagebox.showinfo."""
-    d = StyledDialog(parent, title, message, dialog_type="info")
+    d = StyledDialog(parent, title, message, dialog_type="info", **kwargs)
     d.get_result()
 
-def styled_showwarning(parent, title, message):
+def styled_showwarning(parent, title, message, **kwargs):
     """Show a styled warning dialog. Replaces messagebox.showwarning."""
-    d = StyledDialog(parent, title, message, dialog_type="warning")
+    d = StyledDialog(parent, title, message, dialog_type="warning", **kwargs)
     d.get_result()
 
-def styled_showerror(parent, title, message):
+def styled_showerror(parent, title, message, **kwargs):
     """Show a styled error dialog. Replaces messagebox.showerror."""
-    d = StyledDialog(parent, title, message, dialog_type="error")
+    d = StyledDialog(parent, title, message, dialog_type="error", **kwargs)
     d.get_result()
 
 def styled_askyesno(parent, title, message, **kwargs):
@@ -382,14 +618,16 @@ CONFIG_FILE = os.path.join(APPDATA_DIR, "servers.json")
 SETTINGS_FILE = os.path.join(APPDATA_DIR, "settings.json")
 
 class App(ctk.CTk):
-    def __init__(self):
+    def __init__(self, smart_wipe_ip=None):
         super().__init__()
+        
+        self.smart_wipe_ip = smart_wipe_ip
 
         self.title("Rust Auto-Queue Launcher - V2")
         
         # Centrar en la pantalla (Landscape Dashboard layout)
         window_width = 820
-        window_height = 620
+        window_height = 740
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         x_cordinate = int((screen_width / 2) - (window_width / 2))
@@ -428,6 +666,24 @@ class App(ctk.CTk):
 
         # Timer para debounce del slider
         self._delay_save_timer = None
+
+        # --- Reconexión Inteligente (modo oculto) ---
+        self._reconnect_active = False
+        self._reconnect_job = None
+        self._reconnect_interval = self.settings.get("reconnect_interval", 30)  # minutos
+        self._reconnect_panel_visible = False
+        self._version_clicks = 0
+        self._version_click_timer = None
+        self._reconnect_toplevel = None
+
+        # Variables para animaciones de Skeleton
+        self._active_skeletons = set()
+        self._skeleton_animator_running = False
+
+        # Banner de Smart Bridge (oculto por defecto)
+        self.smart_bridge_banner = ctk.CTkFrame(self, height=40, fg_color="#d46b08", corner_radius=0)
+        self.smart_bridge_lbl = ctk.CTkLabel(self.smart_bridge_banner, text="⚡ MODO WIPE INTELIGENTE — Despertado por Auto-Queue", font=self.font_subtitle, text_color="white")
+        self.smart_bridge_lbl.pack(pady=5)
 
         # --- ESTRUCTURA PRINCIPAL (SIDEBAR + CONTENEDOR) ---
         self.sidebar_frame = ctk.CTkFrame(self, width=170, corner_radius=0, fg_color="#141416")
@@ -543,8 +799,30 @@ class App(ctk.CTk):
         self.nav_buttons["settings"] = settings_btn
 
         # Footer in sidebar
-        lbl_version = ctk.CTkLabel(self.sidebar_frame, text=f"v{CURRENT_VERSION}", font=ctk.CTkFont(size=10), text_color="#555555")
+        lbl_version = ctk.CTkLabel(self.sidebar_frame, text=f"v{CURRENT_VERSION}", font=ctk.CTkFont(size=10), text_color="#555555", cursor="hand2")
         lbl_version.pack(side="bottom", pady=(0, 10))
+        lbl_version.bind("<Button-1>", self._on_version_click)
+        self._lbl_version = lbl_version
+        
+        # Panel oculto de reconexión (inicialmente invisible)
+        self._reconnect_frame = ctk.CTkFrame(self.sidebar_frame, fg_color="#1a1a2e", corner_radius=8, border_width=1, border_color="#333366")
+        self._rc_toggle_var = ctk.BooleanVar(value=self.settings.get("reconnect_enabled", False))
+        rc_title = ctk.CTkLabel(self._reconnect_frame, text="🔄 Reconexión", font=ctk.CTkFont(size=11, weight="bold"), text_color="#8888ff")
+        rc_title.pack(pady=(8, 2))
+        rc_switch = ctk.CTkSwitch(self._reconnect_frame, text="Activa", variable=self._rc_toggle_var, command=self._on_reconnect_toggle,
+                                  font=ctk.CTkFont(size=10), progress_color="#5555cc", width=40, height=18)
+        rc_switch.pack(pady=(0, 4))
+        rc_interval_frame = ctk.CTkFrame(self._reconnect_frame, fg_color="transparent")
+        rc_interval_frame.pack(fill="x", padx=8, pady=(0, 4))
+        ctk.CTkLabel(rc_interval_frame, text="Cada", font=ctk.CTkFont(size=9), text_color="#888").pack(side="left")
+        self._rc_interval_label = ctk.CTkLabel(rc_interval_frame, text=f"{self._reconnect_interval} min", font=ctk.CTkFont(size=9, weight="bold"), text_color="#aaaaff")
+        self._rc_interval_label.pack(side="right")
+        self._rc_slider = ctk.CTkSlider(self._reconnect_frame, from_=5, to=60, number_of_steps=11, width=130, height=14,
+                                        fg_color="#222244", progress_color="#5555cc", button_color="#7777ee",
+                                        command=self._on_reconnect_interval_change)
+        self._rc_slider.set(self._reconnect_interval)
+        self._rc_slider.pack(padx=8, pady=(0, 8))
+        # NO pack del frame aún - se muestra con el easter egg
         
         lbl_author = ctk.CTkLabel(self.sidebar_frame, text="Desarrollado por faabra", font=ctk.CTkFont(size=10), text_color="#555555")
         lbl_author.pack(side="bottom", pady=(0, 0))
@@ -557,8 +835,11 @@ class App(ctk.CTk):
         self.create_logs_page()
         self.create_discord_page()
 
-        # Iniciar en la página principal
-        self.switch_page("home")
+        # Inicializar Smart Bridge si corresponde
+        if self.smart_wipe_ip:
+            self.after(200, self._init_smart_bridge)
+        else:
+            self.switch_page("home")
 
         # Rellenar IP activa si existe
         self._populate_active_ip()
@@ -578,6 +859,10 @@ class App(ctk.CTk):
         self.bind_all("<Button-1>", un_focus)
 
         logger.info("Aplicación iniciada v%s", CURRENT_VERSION)
+
+        # Restaurar reconexión inteligente si estaba activa (pero mantener panel oculto)
+        if self.settings.get("reconnect_enabled", False):
+            self._start_reconnect_loop()
 
     # --- SISTEMA DE ACTUALIZACIONES ---
     def check_for_updates(self):
@@ -746,6 +1031,11 @@ del "%~f0"
 
     def save_servers(self):
         try:
+            # Backup silencioso antes de sobreescribir
+            backup = CONFIG_FILE + ".bak"
+            if os.path.exists(CONFIG_FILE):
+                import shutil
+                shutil.copy2(CONFIG_FILE, backup)
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.servers_data, f, indent=4)
         except Exception as e:
@@ -767,6 +1057,11 @@ del "%~f0"
 
     def save_settings(self):
         try:
+            # Backup silencioso antes de sobreescribir
+            backup = SETTINGS_FILE + ".bak"
+            if os.path.exists(SETTINGS_FILE):
+                import shutil
+                shutil.copy2(SETTINGS_FILE, backup)
             with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.settings, f, indent=4)
         except Exception as e:
@@ -830,9 +1125,14 @@ del "%~f0"
         self.home_card.pack(fill="x", pady=(0, 10), after=self.ip_frame)
         
         self.hc_title.configure(text=raw_val if raw_val in self.servers_data else "Servidor No Guardado")
-        self.hc_status.configure(text=" ● COMPROBANDO ", text_color="#aaa")
-        self.hc_ping.configure(text="Ping: --")
-        self.hc_players.configure(text="--/-- PLAYERS")
+        self.hc_status.configure(text="   COMPROBANDO   ", text_color="#aaa")
+        
+        # Iniciar esqueletos
+        self.hc_ping.configure(text="        ", text_color="#2b2b2f", fg_color="#2b2b2f", corner_radius=4)
+        self.hc_players.configure(text="              ", text_color="#2b2b2f", fg_color="#2b2b2f", corner_radius=4)
+        self._register_skeleton(self.hc_ping)
+        self._register_skeleton(self.hc_players)
+        
         
         def do_fetch():
             import socket, re, subprocess, threading
@@ -840,7 +1140,7 @@ del "%~f0"
             port = int(ip.split(":")[1]) if ":" in ip else 28015
             
             a2s_data = None
-            for test_port in list(dict.fromkeys([port, port + 1, port + 15])):
+            for test_port in list(dict.fromkeys([port, port + 1, port + 15, 28015])):
                 if a2s_data is not None: break
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 sock.settimeout(1.0)
@@ -889,17 +1189,21 @@ del "%~f0"
             def update_ui():
                 try:
                     if not self.hc_status.winfo_exists(): return
+                    
+                    self._unregister_skeleton(self.hc_ping)
+                    self._unregister_skeleton(self.hc_players)
+                    
                     if a2s_data:
-                        self.hc_players.configure(text=a2s_data["players_text"])
+                        self.hc_players.configure(text=a2s_data["players_text"], text_color="#ccc", fg_color="transparent")
                     else:
-                        self.hc_players.configure(text="--/-- PLAYERS")
+                        self.hc_players.configure(text="--/-- PLAYERS", text_color="#ccc", fg_color="transparent")
                         
                     if is_online or a2s_data:
                         self.hc_status.configure(text=" ● ACTIVE ", text_color="#28a745")
-                        self.hc_ping.configure(text=f"Ping: {ms}ms" if ms else "Ping: <1ms")
+                        self.hc_ping.configure(text=f"Ping: {ms}ms" if ms else "Ping: <1ms", text_color="white", fg_color="transparent")
                     else:
-                        self.hc_status.configure(text=" ● OFFLINE ", text_color="#dc3545")
-                        self.hc_ping.configure(text="Ping: Timeout")
+                        self.hc_status.configure(text=" OFFLINE ", text_color="#d9534f")
+                        self.hc_ping.configure(text="Ping: FAIL", text_color="#d9534f", fg_color="transparent")
                 except Exception: pass
             self.after(0, update_ui)
         import threading
@@ -907,8 +1211,9 @@ del "%~f0"
 
     def test_windows_password(self):
         password = self.pw_entry.get()
-        if not password:
-            styled_showwarning(self, "Aviso", "Por favor, escribe tu contraseña antes de verificar.")
+        user = self.user_entry.get().strip()
+        if not password or not user:
+            styled_showwarning(self, "Aviso", "Por favor, escribe tu usuario y contraseña antes de verificar.")
             return
             
         advapi32 = ctypes.WinDLL('advapi32', use_last_error=True)
@@ -917,7 +1222,7 @@ del "%~f0"
         token = ctypes.c_void_p()
         
         result = advapi32.LogonUserW(
-            self.sys_user,
+            user,
             self.sys_domain,
             password,
             LOGON32_LOGON_NETWORK,
@@ -927,7 +1232,7 @@ del "%~f0"
         
         if result:
             ctypes.windll.kernel32.CloseHandle(token)
-            styled_showinfo(self, "¡Correcto!", "Verificación exitosa. Esta contraseña es válida y funcionará perfectamente para el arranque automático.")
+            ToastNotification.show(self, "Contraseña verificada", "success")
             self.pw_entry.configure(border_color="#28a745")
         else:
             styled_showerror(self, "Clave Incorrecta", "La autenticación ha fallado, esa no es la contraseña.\n\nNOTA: Si ingresas en Windows usando un PIN, huella o Windows Hello, la contraseña real oculta de tu cuenta Microsoft puede ser diferente.")
@@ -948,6 +1253,59 @@ del "%~f0"
         """Guarda el delay a disco (llamado por el debounce)."""
         self._delay_save_timer = None
         self.save_settings()
+
+    def _register_skeleton(self, widget):
+        self._active_skeletons.add(widget)
+        if not self._skeleton_animator_running:
+            self._skeleton_animator_running = True
+            self._skeleton_animator_loop(0)
+
+    def _unregister_skeleton(self, widget):
+        if widget in self._active_skeletons:
+            self._active_skeletons.remove(widget)
+
+    def _skeleton_animator_loop(self, step):
+        import math
+        # Clean up destroyed widgets
+        self._active_skeletons = {w for w in self._active_skeletons if w.winfo_exists()}
+        
+        if not self._active_skeletons:
+            self._skeleton_animator_running = False
+            return
+            
+        # Oscilar entre #202022 y #323238 usando un sin wave
+        factor = (math.sin(step * 0.15) + 1) / 2  # de 0 a 1
+        
+        r1, g1, b1 = int("20", 16), int("20", 16), int("22", 16)
+        r2, g2, b2 = int("32", 16), int("32", 16), int("38", 16)
+        
+        cr = int(r1 + (r2 - r1) * factor)
+        cg = int(g1 + (g2 - g1) * factor)
+        cb = int(b1 + (b2 - b1) * factor)
+        
+        color_hex = f"#{cr:02x}{cg:02x}{cb:02x}"
+        
+        for w in self._active_skeletons:
+            try:
+                w.configure(fg_color=color_hex)
+            except Exception:
+                pass
+                
+        self.after(50, lambda: self._skeleton_animator_loop(step + 1))
+
+    def _init_smart_bridge(self):
+        # 1. Ocultar sidebar
+        self.sidebar_frame.pack_forget()
+        
+        # 2. Mostrar banner
+        self.smart_bridge_banner.pack(side="top", fill="x", before=self.container_frame)
+        
+        # 3. Cambiar a Wipe-Spam
+        self.switch_page("snipe")
+        
+        # 4. Configurar IP y arrancar
+        self.snipe_ip_entry.set(self.smart_wipe_ip)
+        self.toggle_snipe()
 
     def _populate_active_ip(self):
         """No pre-rellenar el campo con sesiones antiguas."""
@@ -987,12 +1345,7 @@ del "%~f0"
 
     def _show_saved_feedback(self):
         """Muestra feedback visual '✓ Guardado' temporal (A2)."""
-        if hasattr(self, '_saved_label') and self._saved_label.winfo_exists():
-            self._saved_label.destroy()
-        self._saved_label = ctk.CTkLabel(self.settings_frame, text="✓ Guardado", 
-                                         font=ctk.CTkFont(size=11), text_color=COLOR_GREEN)
-        self._saved_label.pack(anchor="e", padx=20)
-        self.after(2000, lambda: self._saved_label.destroy() if self._saved_label.winfo_exists() else None)
+        ToastNotification.show(self, "Guardado correctamente", "success")
 
     def _check_steam_installed(self):
         """Verifica que Steam esté instalado en el sistema (B3)."""
@@ -1144,7 +1497,7 @@ del "%~f0"
     def get_active_ip_from_bat(self):
         try:
             with open(self.startup_path, "r", encoding="utf-8") as f:
-                match = re.search(r'\+connect\s+([^\s"]+)', f.read())
+                match = re.search(r'\+connect(?:%20|\s+)([^\s"%]+)', f.read())
                 if match: return match.group(1)
         except Exception: pass
         return None
@@ -1244,6 +1597,125 @@ del "%~f0"
                 self.status_dot.configure(text_color=COLOR_GREEN)
                 self.status_frame.configure(fg_color="#1a2a1a")
 
+    def _get_steam_exe(self):
+        """Devuelve la ruta completa del ejecutable de Steam."""
+        import winreg
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam")
+            s_exe, _ = winreg.QueryValueEx(key, "SteamExe")
+            winreg.CloseKey(key)
+            if s_exe:
+                return s_exe.replace('/', '\\')
+        except Exception:
+            pass
+        return "steam.exe"
+
+    def _ensure_steam_account(self):
+        """Si hay cuenta activa seleccionada, cierra Steam y lo reabre con esa cuenta configurada."""
+        import subprocess, time as _time
+        active_steam_user = self.settings.get("active_steam_user")
+        if not active_steam_user:
+            return
+        
+        # Configurar registro y loginusers.vdf
+        self.set_active_steam_account(active_steam_user)
+        
+        # Desactivar el selector de cuentas de Steam ("¿Quién va a jugar?")
+        self._set_steam_user_chooser(False)
+        
+        # Comprobar si Steam está abierto
+        try:
+            result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq steam.exe', '/NH'],
+                                  capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            steam_running = 'steam.exe' in result.stdout.lower()
+        except Exception:
+            steam_running = False
+        
+        if steam_running:
+            steam_exe = self._get_steam_exe()
+            # Cerrar Steam limpiamente
+            try:
+                subprocess.run([steam_exe, '-shutdown'], creationflags=subprocess.CREATE_NO_WINDOW, timeout=5)
+            except Exception:
+                try:
+                    subprocess.run(['taskkill', '/F', '/IM', 'steam.exe'], 
+                                 creationflags=subprocess.CREATE_NO_WINDOW, timeout=5)
+                except Exception:
+                    pass
+            
+            # Esperar a que Steam cierre completamente
+            for _ in range(15):  # max 7.5 segundos
+                _time.sleep(0.5)
+                try:
+                    r = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq steam.exe', '/NH'],
+                                     capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                    if 'steam.exe' not in r.stdout.lower():
+                        break
+                except Exception:
+                    break
+            
+            _time.sleep(1)  # margen extra
+            
+            # Relanzar Steam (sin juego, solo para que arranque con la cuenta correcta)
+            try:
+                subprocess.Popen([steam_exe], creationflags=subprocess.CREATE_NO_WINDOW)
+                _time.sleep(3)  # dar tiempo a que Steam arranque
+            except Exception:
+                pass
+        
+        logger.info("Steam preparado con cuenta: %s", active_steam_user)
+
+    def _set_steam_user_chooser(self, enabled):
+        """Activa o desactiva el 'AlwaysShowUserChooser' en config.vdf de Steam."""
+        import re
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam")
+            steam_path, _ = winreg.QueryValueEx(key, "SteamPath")
+            winreg.CloseKey(key)
+        except Exception:
+            return
+        
+        config_path = os.path.join(steam_path, "config", "config.vdf")
+        if not os.path.exists(config_path):
+            return
+        
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            
+            new_val = "1" if enabled else "0"
+            
+            if '"AlwaysShowUserChooser"' in content:
+                content = re.sub(
+                    r'("AlwaysShowUserChooser"\s*)"[^"]*"',
+                    rf'\1"{new_val}"',
+                    content
+                )
+            else:
+                # Insertar dentro del bloque "WebStorage" > "Auth" si existe, o crear
+                if '"Auth"' in content:
+                    content = re.sub(
+                        r'("Auth"\s*\{)',
+                        rf'\1\n\t\t\t"AlwaysShowUserChooser"\t\t"{new_val}"',
+                        content
+                    )
+            
+            with open(config_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            logger.info("Steam AlwaysShowUserChooser -> %s", new_val)
+        except Exception as e:
+            logger.error("Error modificando config.vdf: %s", e)
+
+    def _get_steam_launch_cmd(self, ip, as_list=False):
+        """Devuelve el comando para lanzar Rust via steam:// URL (para ejecución directa, NO para .bat)."""
+        import time
+        rust_args_url = f"+connect%20{ip}%20+aq%20{int(time.time())}"
+        
+        if as_list:
+            return ['explorer.exe', f'steam://run/252490//{rust_args_url}']
+        else:
+            return f'start explorer.exe "steam://run/252490//{rust_args_url}"'
+
     def activate_auto_queue(self):
         # Animación visual del botón
         self._flash_activate_button()
@@ -1266,6 +1738,13 @@ del "%~f0"
 
         # 2. Validación de Contraseña
         password = self.pw_entry.get()
+        user = self.user_entry.get().strip()
+        
+        # Guardar usuario
+        if user:
+            self.settings["saved_sys_user"] = user
+            self.save_settings()
+            
         if not password:
             if not styled_askyesno(self, "Aviso", "No has introducido tu contraseña de Windows de AutoLogon. ¿Quieres activar la auto-cola sin configurar el AutoLogon de la cuenta? (Si tienes el PC con código/clave el arranque se quedará bloqueado en la pantalla).", height=280):
                 return
@@ -1282,19 +1761,37 @@ del "%~f0"
             self.save_settings()
 
         # Asegurar que se configure la cuenta de Steam elegida
-        active_steam_user = self.settings.get("active_steam_user")
-        if active_steam_user:
-            self.set_active_steam_account(active_steam_user)
+        self._ensure_steam_account()
 
         # ACCIÓN A: Escribir credenciales en Registro (Winlogon)
         if password:
             try:
                 key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon", 0, winreg.KEY_SET_VALUE)
                 winreg.SetValueEx(key, "AutoAdminLogon", 0, winreg.REG_SZ, "1")
-                winreg.SetValueEx(key, "DefaultUserName", 0, winreg.REG_SZ, self.sys_user)
+                winreg.SetValueEx(key, "DefaultUserName", 0, winreg.REG_SZ, user)
                 winreg.SetValueEx(key, "DefaultDomainName", 0, winreg.REG_SZ, self.sys_domain)
                 winreg.SetValueEx(key, "DefaultPassword", 0, winreg.REG_SZ, password)
                 winreg.CloseKey(key)
+                
+                # Deshabilitar pedir contraseña al despertar (AC y DC) - IMPORTANTE PARA SUSPENDER
+                try:
+                    import subprocess
+                    subprocess.run("powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_NONE CONSOLELOCK 0", shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                    subprocess.run("powercfg /SETDCVALUEINDEX SCHEME_CURRENT SUB_NONE CONSOLELOCK 0", shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                    subprocess.run("powercfg /SETACTIVE SCHEME_CURRENT", shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                    
+                    # Respaldo por registro por si powercfg falla (Políticas de grupo)
+                    power_key_path = r"SOFTWARE\Policies\Microsoft\Power\PowerSettings\0e796bdb-100d-47d6-a2d5-f7d2daa51f51"
+                    try:
+                        winreg.CreateKey(winreg.HKEY_LOCAL_MACHINE, power_key_path)
+                        power_key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, power_key_path, 0, winreg.KEY_SET_VALUE)
+                        winreg.SetValueEx(power_key, "ACSettingIndex", 0, winreg.REG_DWORD, 0)
+                        winreg.SetValueEx(power_key, "DCSettingIndex", 0, winreg.REG_DWORD, 0)
+                        winreg.CloseKey(power_key)
+                    except Exception: pass
+                except Exception as e:
+                    logger.warning("No se pudo desactivar el bloqueo en suspensión: %s", e)
+                    
             except Exception as e:
                 styled_showerror(self, "Error Sistema", f"No se pudo modificar el registro de AutoLogon.\nPor favor reinicia la aplicación asegurándote de que aceptaste los permisos de Administrador.\nError: {e}")
                 return
@@ -1311,26 +1808,57 @@ del "%~f0"
                 exe_cmd = f'start "" "{sys.executable}" --smart-wipe {ip}'
             else:
                 exe_cmd = f'start "" "{sys.executable}" "{os.path.abspath(__file__)}" --smart-wipe {ip}'
+            steam_preludio = ""
         else:
-            exe_cmd = f'start explorer.exe "steam://run/252490//+connect%20{ip}%20+aq%20{int(time.time())}"'
+            # Usar steam://run/ con %%20 (escapado para batch) en vez de %20
+            # En un .bat, %2 se interpreta como parámetro del script, así que
+            # hay que escapar con %% para obtener un literal %
+            rust_url = f'steam://run/252490//+connect%%20{ip}'
+            exe_cmd = f'start explorer.exe "{rust_url}"'
+            
+            # Preparar preludio de cambio de cuenta Steam para el .bat
+            active_steam_user = self.settings.get("active_steam_user")
+            steam_preludio = ""
+            if active_steam_user:
+                steam_exe = self._get_steam_exe()
+                steam_preludio = (
+                    f'REM --- Cambio de cuenta Steam ---\n'
+                    f'taskkill /F /IM steam.exe >nul 2>&1\n'
+                    f'timeout /t 5 /nobreak >nul\n'
+                    f'start "" "{steam_exe}"\n'
+                    f'timeout /t 10 /nobreak >nul\n'
+                    f'REM --- Fin cambio de cuenta ---\n'
+                )
+
+        # Añadir inicio de Auto-Queue si Reconexión está activa
+        auto_queue_cmd = ""
+        if self.settings.get("reconnect_enabled", False):
+            import sys, os
+            is_compiled = getattr(sys, 'frozen', False)
+            if is_compiled:
+                auto_queue_cmd = f'\nREM --- Iniciar vigilante de reconexión ---\nstart "" "{sys.executable}"\n'
+            else:
+                auto_queue_cmd = f'\nREM --- Iniciar vigilante de reconexión ---\nstart "" "{sys.executable}" "{os.path.abspath(__file__)}"\n'
 
         if one_time:
             bat_content = (
                 f'@echo off\n'
                 f'timeout /t {delay} /nobreak\n'
+                f'{steam_preludio}'
                 f'{exe_cmd}\n'
+                f'{auto_queue_cmd}'
                 f'timeout /t 5 /nobreak\n'
                 f'del "%~f0"\n'
             )
         else:
-            bat_content = f'@echo off\ntimeout /t {delay} /nobreak\n{exe_cmd}\n'
+            bat_content = f'@echo off\ntimeout /t {delay} /nobreak\n{steam_preludio}{exe_cmd}\n{auto_queue_cmd}'
         
         try:
             with open(self.startup_path, "w", encoding="utf-8") as f:
                 f.write(bat_content)
             self.check_status()
             logger.info("Auto-cola ACTIVADA - IP: %s, Delay: %ds, OneTime: %s", ip, delay, one_time)
-            styled_showinfo(self, "Éxito", "¡Operación completada con éxito!\n\nSe ha configurado el inicio automático de usuario de Windows y se lanzará Rust automáticamente al encender.")
+            ToastNotification.show(self, "Auto-Cola activada correctamente", "success")
         except Exception as e:
             styled_showerror(self, "Error Archivo", f"No se pudo crear el archivo:\n{str(e)}")
 
@@ -1344,16 +1872,34 @@ del "%~f0"
             except Exception:
                 pass
             winreg.CloseKey(key)
+            
+            # Restaurar pedir contraseña al despertar (AC y DC)
+            try:
+                import subprocess
+                subprocess.run("powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_NONE CONSOLELOCK 1", shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                subprocess.run("powercfg /SETDCVALUEINDEX SCHEME_CURRENT SUB_NONE CONSOLELOCK 1", shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                subprocess.run("powercfg /SETACTIVE SCHEME_CURRENT", shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                
+                power_key_path = r"SOFTWARE\Policies\Microsoft\Power\PowerSettings\0e796bdb-100d-47d6-a2d5-f7d2daa51f51"
+                try:
+                    power_key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, power_key_path, 0, winreg.KEY_SET_VALUE)
+                    winreg.SetValueEx(power_key, "ACSettingIndex", 0, winreg.REG_DWORD, 1)
+                    winreg.SetValueEx(power_key, "DCSettingIndex", 0, winreg.REG_DWORD, 1)
+                    winreg.CloseKey(power_key)
+                except Exception: pass
+            except Exception: pass
         except Exception as e:
             logger.warning("Error limpiando registro Winlogon: %s", e)
 
+        # Restaurar el selector de cuentas de Steam
+        self._set_steam_user_chooser(True)
         # ACCIÓN B: Borrar .bat
         try:
             if os.path.exists(self.startup_path):
                 os.remove(self.startup_path)
             self.check_status()
             logger.info("Auto-cola DESACTIVADA")
-            styled_showinfo(self, "Desactivado", "Todo se ha limpiado correctamente. Tu ordenador volverá a pedir contraseña como de costumbre al arrancar.")
+            ToastNotification.show(self, "Auto-Cola desactivada", "info")
         except Exception as e:
             logger.error("Error borrando .bat de startup: %s", e)
 
@@ -1372,16 +1918,156 @@ del "%~f0"
             return
 
         # Aplicar la cuenta activa antes de probar
-        active_steam_user = self.settings.get("active_steam_user")
-        if active_steam_user:
-            self.set_active_steam_account(active_steam_user)
+        self._ensure_steam_account()
 
         try:
-            subprocess.Popen(['explorer.exe', f'steam://run/252490//+connect%20{ip}%20+aq%20{int(time.time())}'],
+            subprocess.Popen(self._get_steam_launch_cmd(ip, as_list=True),
                             creationflags=subprocess.CREATE_NO_WINDOW)
             logger.info("Test de conexión lanzado: %s", ip)
         except Exception as e:
             logger.error("Error al probar conexión: %s", e)
+
+    def run_system_diagnostic(self):
+        """Verifica todos los componentes críticos del sistema y muestra un resumen."""
+        import winreg, os, subprocess
+        results = []
+        all_ok = True
+
+        # 1. Permisos de administrador
+        try:
+            import ctypes as _ctypes
+            is_admin = _ctypes.windll.shell32.IsUserAnAdmin() != 0
+            if is_admin:
+                results.append(("Permisos Admin", "✅ Ejecutándose como Administrador"))
+            else:
+                results.append(("Permisos Admin", "⚠️ Sin permisos elevados (algunas funciones pueden fallar)"))
+                all_ok = False
+        except:
+            results.append(("Permisos Admin", "❌ No se pudo verificar"))
+            all_ok = False
+
+        # 2. Steam detectado
+        try:
+            import winreg as _reg
+            key = _reg.OpenKey(_reg.HKEY_CURRENT_USER, r"Software\Valve\Steam")
+            steam_path, _ = _reg.QueryValueEx(key, "SteamPath")
+            if os.path.exists(steam_path):
+                results.append(("Steam", f"✅ Encontrado en: {steam_path}"))
+            else:
+                results.append(("Steam", "❌ Ruta de Steam no existe"))
+                all_ok = False
+        except:
+            results.append(("Steam", "⚠️ No se encontró Steam en el registro"))
+            all_ok = False
+
+        # 3. Archivo .bat de arranque
+        try:
+            if hasattr(self, 'startup_path') and os.path.exists(self.startup_path):
+                results.append(("Archivo .bat", f"✅ Existe en Inicio de Windows"))
+            else:
+                results.append(("Archivo .bat", "❌ No configurado (Auto-Cola no activa)"))
+        except:
+            results.append(("Archivo .bat", "❌ No se pudo verificar"))
+
+        # 4. AutoLogon en registro
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+                0, winreg.KEY_READ)
+            auto_logon, _ = winreg.QueryValueEx(key, "AutoAdminLogon")
+            default_user, _ = winreg.QueryValueEx(key, "DefaultUserName")
+            if auto_logon == "1":
+                results.append(("AutoLogon", f"✅ Activo para usuario: {default_user}"))
+            else:
+                results.append(("AutoLogon", "⚠️ No configurado"))
+        except Exception as e:
+            results.append(("AutoLogon", "❌ No configurado o sin acceso al registro"))
+
+        # 5. Servidor guardado
+        if self.servers_data:
+            active_ip = self.get_active_ip_from_bat()
+            if active_ip:
+                results.append(("Servidor Objetivo", f"✅ IP configurada: {active_ip}"))
+            else:
+                results.append(("Servidor Objetivo", f"⚠️ Hay {len(self.servers_data)} servidor(es) pero ninguno activo en .bat"))
+        else:
+            results.append(("Servidor Objetivo", "❌ No hay servidores guardados"))
+            all_ok = False
+
+        # 6. Conectividad (ping rápido al primero)
+        try:
+            active_ip = self.get_active_ip_from_bat()
+            if active_ip:
+                import socket
+                host = active_ip.split(":")[0]
+                port = int(active_ip.split(":")[1]) if ":" in active_ip else 28015
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.settimeout(1.5)
+                sock.sendto(b'\xFF\xFF\xFF\xFFTSource Engine Query\x00', (host, port))
+                data, _ = sock.recvfrom(256)
+                sock.close()
+                if data:
+                    results.append(("Conectividad A2S", f"✅ Servidor responde ({host}:{port})"))
+                else:
+                    results.append(("Conectividad A2S", f"⚠️ Sin respuesta"))
+            else:
+                results.append(("Conectividad A2S", "➖ No hay IP activa para probar"))
+        except Exception as e:
+            results.append(("Conectividad A2S", f"❌ Sin respuesta (puede estar offline o wipeando)"))
+
+        # Construir modal visual con CTkToplevel
+        modal = ctk.CTkToplevel(self)
+        modal.title("Diagnóstico del Sistema")
+        modal.configure(fg_color="#121214")
+        modal.resizable(False, False)
+        modal.transient(self)
+        modal.grab_set()
+        
+        self.update_idletasks()
+        mw, mh = 500, min(120 + len(results) * 72, 560)
+        x = self.winfo_x() + (self.winfo_width() - mw) // 2
+        y = self.winfo_y() + (self.winfo_height() - mh) // 2
+        modal.geometry(f"{mw}x{mh}+{x}+{y}")
+        
+        _icon_path = os.path.join(sys._MEIPASS, 'rust.ico') if hasattr(sys, '_MEIPASS') else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rust.ico')
+        if os.path.exists(_icon_path):
+            modal.after(50, lambda: modal.iconbitmap(_icon_path))
+        
+        header_color = "#28a745" if all_ok else "#e09a20"
+        header_text = "✅  Todo correcto" if all_ok else "⚠️  Se encontraron advertencias"
+        
+        header_frame = ctk.CTkFrame(modal, fg_color=header_color, corner_radius=0, height=56)
+        header_frame.pack(fill="x")
+        header_frame.pack_propagate(False)
+        ctk.CTkLabel(header_frame, text=header_text, font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"), text_color="white").pack(expand=True)
+        
+        scroll = ctk.CTkScrollableFrame(modal, fg_color="transparent", scrollbar_button_color="#333", scrollbar_button_hover_color="#555")
+        scroll.pack(fill="both", expand=True, padx=16, pady=12)
+        
+        icon_map = {"✅": "#28a745", "⚠️": "#e09a20", "❌": "#ce422b", "➖": "#555555"}
+        
+        for name, status in results:
+            row = ctk.CTkFrame(scroll, fg_color="#1a1a1c", corner_radius=8, border_width=1, border_color="#2b2b2f")
+            row.pack(fill="x", pady=4)
+            
+            # Determinar color del icono
+            row_color = "#555"
+            for symbol, color in icon_map.items():
+                if symbol in status:
+                    row_color = color
+                    break
+            
+            accent = ctk.CTkFrame(row, fg_color=row_color, width=4, corner_radius=0)
+            accent.pack(side="left", fill="y")
+            
+            txt_frame = ctk.CTkFrame(row, fg_color="transparent")
+            txt_frame.pack(side="left", fill="x", expand=True, padx=12, pady=8)
+            
+            ctk.CTkLabel(txt_frame, text=name.upper(), font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color="#aaaaaa", anchor="w").pack(fill="x")
+            ctk.CTkLabel(txt_frame, text=status, font=ctk.CTkFont(family="Segoe UI", size=13), text_color="white", anchor="w", wraplength=380).pack(fill="x")
+        
+        btn_close = ctk.CTkButton(modal, text="Cerrar", height=36, fg_color="#2b2b2b", hover_color="#3b3b3b", command=modal.destroy)
+        btn_close.pack(fill="x", padx=16, pady=(0, 12))
 
     def create_home_page(self):
         home_page = ctk.CTkFrame(self.container_frame, fg_color="transparent")
@@ -1577,6 +2263,22 @@ del "%~f0"
         self.status_wake_label = ctk.CTkLabel(status_inner, text="Sin despertador configurado", font=self.font_small, text_color="#555555", anchor="w")
         self.status_wake_label.pack(fill="x", anchor="w", padx=(22, 0))
         
+        # Windows username
+        user_label = ctk.CTkLabel(col1, text="Usuario de Windows (AutoLogon):", font=self.font_label, text_color="white")
+        user_label.pack(anchor="w", pady=(5, 2))
+        
+        self.user_entry = ctk.CTkEntry(
+            col1,
+            placeholder_text="Ej: diego@hotmail.com o diego",
+            height=36,
+            font=self.font_text,
+            fg_color="#1a1a1c",
+            border_color="#333335"
+        )
+        self.user_entry.pack(fill="x", pady=(0, 10))
+        self.user_entry.insert(0, self.settings.get("saved_sys_user", self.sys_user))
+        Tooltip(self.user_entry, "Si usas cuenta local, pon tu usuario. Si usas cuenta Microsoft, pon tu email completo.")
+        
         # Windows password
         pw_label = ctk.CTkLabel(col1, text="Contraseña de Windows (AutoLogon):", font=self.font_label, text_color="white")
         pw_label.pack(anchor="w", pady=(5, 2))
@@ -1642,6 +2344,7 @@ del "%~f0"
             command=self.activate_auto_queue
         )
         self.btn_activate.pack(fill="x", pady=(20, 8))
+        self._add_press_effect(self.btn_activate)
         
         self.btn_deactivate = ctk.CTkButton(
             col1,
@@ -1656,6 +2359,7 @@ del "%~f0"
             command=self.deactivate_auto_queue
         )
         self.btn_deactivate.pack(fill="x", pady=0)
+        self._add_press_effect(self.btn_deactivate)
         
         self.btn_auto_wake = ctk.CTkButton(
             col1,
@@ -1670,6 +2374,7 @@ del "%~f0"
             command=lambda: self.switch_page("wake")
         )
         self.btn_auto_wake.pack(fill="x", pady=(8, 8))
+        self._add_press_effect(self.btn_auto_wake)
         
         btn_test = ctk.CTkButton(
             col1,
@@ -1684,6 +2389,22 @@ del "%~f0"
             command=self.test_connection
         )
         btn_test.pack(fill="x", pady=0)
+        self._add_press_effect(btn_test)
+        
+        # Botón de Diagnóstico
+        btn_diag = ctk.CTkButton(
+            col1,
+            text="🔍 Diagnóstico del Sistema",
+            height=32,
+            fg_color="transparent",
+            border_width=1,
+            border_color="#333335",
+            hover_color="#1a1a1c",
+            text_color="#888888",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            command=self.run_system_diagnostic
+        )
+        btn_diag.pack(fill="x", pady=(6, 0))
         
         # Info Box (Bottom Right)
         info_card = ctk.CTkFrame(col1, fg_color="#18181b", border_width=1, border_color="#2b2b2f", corner_radius=8)
@@ -1699,15 +2420,21 @@ del "%~f0"
         import socket, time, subprocess
         host = ip.split(":")[0] if ":" in ip else ip
         port = int(ip.split(":")[1]) if ":" in ip else 28015
+        radar = getattr(self, 'snipe_radar', None)
         
         def is_active():
             return self.is_sniping and (run_id is None or getattr(self, 'snipe_run_id', None) == run_id)
 
+        def set_radar(state, extra=''):
+            if radar:
+                self.after(0, lambda s=state, e=extra: radar.set_state(s, e))
+
         # Fase 1: Esperar a que el servidor se apague
+        set_radar('waiting_offline')
         self.after(0, lambda: is_active() and lbl_status.configure(text="Fase 1: Esperando Wipe (Servidor Online...)", text_color="#aaaaaa"))
         
         def check_online():
-            for test_port in list(dict.fromkeys([port, port + 1, port + 15])):
+            for test_port in list(dict.fromkeys([port, port + 1, port + 15, 28015])):
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 sock.settimeout(0.5)
                 try:
@@ -1748,12 +2475,14 @@ del "%~f0"
                     
                 attempts += 1
                 self.after(0, lambda a=attempts: is_active() and lbl_status.configure(text=f"Fase 1: Esperando Wipe (Servidor Online...) | Intentos: {a}", text_color="#aaaaaa"))
+                set_radar('waiting_offline', f'ping {attempts}')
                 time.sleep(3.0)
                 
         if not is_active():
             return
             
         # Fase 2: El servidor está offline.
+        set_radar('offline')
         self.after(0, lambda: is_active() and lbl_status.configure(text=f"Fase 2: Wipe en proceso. Esperando A2S...", text_color="#ffcc00"))
         attempts = 0
         while is_active():
@@ -1763,15 +2492,18 @@ del "%~f0"
                 
             msg = f"Fase 2: Wipe en proceso. Esperando A2S... | Pings: {attempts}"
             self.after(0, lambda m=msg: is_active() and lbl_status.configure(text=m, text_color="#ffcc00"))
-            time.sleep(0.5)
+            set_radar('offline', f'{attempts}')
+            time.sleep(getattr(self, 'snipe_aggr_delay', 0.5))
             
         if not is_active():
             return
             
         # Conectado!
         self.is_sniping = False
+        set_radar('connecting')
         self.after(0, lambda: lbl_status.configure(text="¡SERVIDOR ONLINE! Conectando en 0ms...", text_color="#00ff00"))
         self.after(0, lambda: btn_snipe.configure(text="COMENZAR SPAM", fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER))
+        self.after(3000, lambda: set_radar('idle') if not self.is_sniping else None)
         
         try:
             import winsound
@@ -1781,8 +2513,13 @@ del "%~f0"
         except: pass
 
         try:
-            subprocess.Popen(['explorer.exe', f'steam://run/252490//+connect%20{ip}%20+aq%20{int(time.time())}'], creationflags=subprocess.CREATE_NO_WINDOW)
+            subprocess.Popen(self._get_steam_launch_cmd(ip, as_list=True), creationflags=subprocess.CREATE_NO_WINDOW)
             logger.info("Snipe Wipe: Conexión lanzada: %s", ip)
+            
+            # Cierre automático en modo Smart Bridge
+            if getattr(self, 'smart_wipe_ip', None):
+                logger.info("Smart Bridge: Conectado. Cerrando UI.")
+                self.after(5000, self.destroy)
         except Exception as e:
             logger.error("Error al probar conexión: %s", e)
             
@@ -1811,7 +2548,7 @@ del "%~f0"
 
         import subprocess
         try:
-            subprocess.Popen(['explorer.exe', f'steam://run/252490//+connect%20{ip}%20+aq%20{int(time.time())}'], creationflags=subprocess.CREATE_NO_WINDOW)
+            subprocess.Popen(self._get_steam_launch_cmd(ip, as_list=True), creationflags=subprocess.CREATE_NO_WINDOW)
             styled_showinfo(self, "Prueba de Conexión", f"Se ha enviado la petición a Steam para conectar a:\n{ip}\n\nRevisa Rust, debería estar conectándose al servidor.")
         except Exception as e:
             from tkinter import messagebox
@@ -1823,6 +2560,7 @@ del "%~f0"
             self.snipe_run_id = None
             lbl_status.configure(text="Spam Cancelado.", text_color="#ff5555")
             btn_snipe.configure(text="COMENZAR SPAM", fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER)
+            if hasattr(self, 'snipe_radar'): self.snipe_radar.set_state('idle')
             return
 
         raw_val = self.snipe_ip_entry.get().strip()
@@ -1915,19 +2653,84 @@ del "%~f0"
         else:
             self.snipe_ip_entry.set("Selecciona un servidor...")
             
-        # Status Radar
-        radar_frame = ctk.CTkFrame(controls_frame, fg_color="#0a0a0c", border_width=1, border_color="#1f1f22", corner_radius=8, height=80)
-        radar_frame.pack(fill="x", padx=40, pady=(10, 30))
-        radar_frame.pack_propagate(False)
-        
-        lbl_status = ctk.CTkLabel(radar_frame, text="Esperando objetivo...", font=ctk.CTkFont(family="Consolas", size=14), text_color="#555555")
-        lbl_status.pack(expand=True)
+        # Status Radar — animated canvas
+        radar_outer = ctk.CTkFrame(controls_frame, fg_color="#0a0a0c", border_width=1, border_color="#1f1f22", corner_radius=8)
+        radar_outer.pack(fill="x", padx=40, pady=(10, 20))
+
+        radar_inner = tk.Frame(radar_outer, bg='#0a0a0c')
+        radar_inner.pack(pady=10)
+
+        # Radar canvas (circular animated)
+        self.snipe_radar = RadarCanvas(radar_inner, size=110)
+        self.snipe_radar.pack(side="left", padx=(15, 10))
+
+        # Status text column
+        status_col = tk.Frame(radar_inner, bg='#0a0a0c')
+        status_col.pack(side="left", fill="both", expand=True, padx=(0, 15))
+
+        lbl_phase = tk.Label(status_col, text="WIPE-SPAM RADAR",
+                             bg='#0a0a0c', fg='#333336',
+                             font=('Segoe UI', 9, 'bold'))
+        lbl_phase.pack(anchor='w', pady=(10, 2))
+
+        lbl_status = tk.Label(status_col, text="Esperando objetivo...",
+                              bg='#0a0a0c', fg='#555558',
+                              font=('Consolas', 12, 'bold'),
+                              wraplength=280, justify='left')
+        lbl_status.pack(anchor='w')
+
+        # Patch configure to work with both CTkLabel and tk.Label
+        original_configure = lbl_status.configure
+        def _patch_configure(**kw):
+            if 'text_color' in kw:
+                kw['fg'] = kw.pop('text_color')
+            original_configure(**kw)
+        lbl_status.configure = _patch_configure
         
         button_frame = ctk.CTkFrame(controls_frame, fg_color="transparent")
         button_frame.pack(pady=(0, 30))
         
-        # Modo selector removido
-        
+        # Slider de Agresividad
+        aggr_frame = ctk.CTkFrame(button_frame, fg_color="transparent")
+        aggr_frame.pack(fill="x", pady=(0, 12))
+
+        aggr_header = ctk.CTkFrame(aggr_frame, fg_color="transparent")
+        aggr_header.pack(fill="x")
+
+        ctk.CTkLabel(aggr_header, text="Agresividad de Escaneo",
+                     font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+                     text_color="#aaaaaa").pack(side="left")
+
+        self.lbl_aggr_value = ctk.CTkLabel(aggr_header, text="Media (0.5s)",
+                                           font=ctk.CTkFont(family="Consolas", size=11),
+                                           text_color=COLOR_RUST_RED)
+        self.lbl_aggr_value.pack(side="right")
+
+        aggr_labels = ctk.CTkFrame(aggr_frame, fg_color="transparent")
+        aggr_labels.pack(fill="x")
+        ctk.CTkLabel(aggr_labels, text="Sutil", font=ctk.CTkFont(size=10), text_color="#555558").pack(side="left")
+        ctk.CTkLabel(aggr_labels, text="Agresivo", font=ctk.CTkFont(size=10), text_color="#555558").pack(side="right")
+
+        # Valores: 0=2s, 1=1s, 2=0.5s, 3=0.2s, 4=0.05s
+        AGGR_STEPS = [2.0, 1.0, 0.5, 0.2, 0.05]
+        AGGR_LABELS = ["Sutil (2s)", "Baja (1s)", "Media (0.5s)", "Alta (0.2s)", "Máxima (50ms)"]
+
+        def on_aggr_change(val):
+            idx = int(round(float(val)))
+            self.snipe_aggr_delay = AGGR_STEPS[idx]
+            self.lbl_aggr_value.configure(text=AGGR_LABELS[idx])
+
+        self.snipe_aggr_delay = 0.5  # Default
+        self.slider_aggr = ctk.CTkSlider(
+            aggr_frame, from_=0, to=4, number_of_steps=4,
+            command=on_aggr_change,
+            fg_color="#1a1a1c", progress_color=COLOR_RUST_RED,
+            button_color="white", button_hover_color="#dddddd",
+            height=16
+        )
+        self.slider_aggr.set(2)  # Posición "Media" por defecto
+        self.slider_aggr.pack(fill="x")
+
         actions_frame = ctk.CTkFrame(button_frame, fg_color="transparent")
         actions_frame.pack(side="top")
         btn_snipe = ctk.CTkButton(
@@ -1940,6 +2743,7 @@ del "%~f0"
         )
         btn_snipe.configure(command=lambda: self._toggle_snipe(lbl_status, btn_snipe))
         btn_snipe.pack(side="left", padx=(0, 10))
+        self._add_press_effect(btn_snipe)
         
         btn_test = ctk.CTkButton(
             actions_frame,
@@ -1994,7 +2798,7 @@ del "%~f0"
         form_frame.grid_columnconfigure(1, weight=1)
         
         # Scrollable list frame
-        self.scroll_servers = ctk.CTkScrollableFrame(servers_page, fg_color="transparent")
+        self.scroll_servers = ctk.CTkScrollableFrame(servers_page, fg_color="transparent", scrollbar_button_color="#333", scrollbar_button_hover_color="#555", corner_radius=0)
         self.scroll_servers.grid(row=2, column=0, sticky="nsew", padx=20, pady=10)
         
         # Footer / Import/Export Controls
@@ -2050,6 +2854,16 @@ del "%~f0"
         modal.configure(fg_color="#121212")
         modal.transient(self)
         modal.grab_set()
+        
+        # Icono de la ventana
+        import sys, os
+        _icon = os.path.join(sys._MEIPASS, 'rust.ico') if hasattr(sys, '_MEIPASS') else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rust.ico')
+        if os.path.exists(_icon):
+            def _apply_icon():
+                try: modal.iconbitmap(_icon)
+                except: pass
+            modal.after(50, _apply_icon)
+            modal.after(250, _apply_icon)
 
         # Center the modal
         self.update_idletasks()
@@ -2118,14 +2932,42 @@ del "%~f0"
             empty_frame = ctk.CTkFrame(self.scroll_servers, fg_color="transparent")
             empty_frame.pack(expand=True, fill="both", pady=40)
             
-            icon_lbl = ctk.CTkLabel(empty_frame, text="\uE83B", font=ctk.CTkFont(family="Segoe UI", size=48), text_color="#333333")
-            icon_lbl.pack(pady=(20, 10))
+            icon_lbl = ctk.CTkLabel(empty_frame, text="📭", font=ctk.CTkFont(family="Segoe UI", size=52), text_color="#444444")
+            icon_lbl.pack(pady=(30, 10))
             
-            empty_lbl = ctk.CTkLabel(empty_frame, text="Aún no tienes ningún servidor guardado.\nAñade el primero usando el formulario superior.", text_color="#777777", font=self.font_text)
+            title_lbl = ctk.CTkLabel(empty_frame, text="Sin servidores guardados", font=ctk.CTkFont(family="Segoe UI", size=17, weight="bold"), text_color="#666666")
+            title_lbl.pack(pady=(0, 6))
+            
+            empty_lbl = ctk.CTkLabel(empty_frame, text="Añade tu primer servidor usando el formulario superior\no explora los servidores destacados.", text_color="#555555", font=self.font_text, justify="center")
             empty_lbl.pack()
             
-            btn_featured = ctk.CTkButton(empty_frame, text="Explorar Destacados", fg_color="#2b2b2b", hover_color="#3b3b3b", command=self.open_featured_servers_modal)
+            btn_featured = ctk.CTkButton(
+                empty_frame, text="🔍  Explorar Servidores Destacados",
+                fg_color="#1e1e21", hover_color="#2b2b30",
+                border_width=1, border_color="#333337",
+                text_color="#aaaaaa", height=38,
+                font=ctk.CTkFont(family="Segoe UI", size=13),
+                command=self.open_featured_servers_modal
+            )
             btn_featured.pack(pady=20)
+            self._add_press_effect(btn_featured)
+            
+            # Fade-in animado
+            widgets = [icon_lbl, title_lbl, empty_lbl, btn_featured]
+            def _fade_in(step=0, total=12):
+                if step > total: return
+                alpha_pct = step / total
+                gray = int(0x44 + (0x66 - 0x44) * alpha_pct)
+                gray_hex = f"#{gray:02x}{gray:02x}{gray:02x}"
+                gray2 = int(0x44 + (0x55 - 0x44) * alpha_pct)
+                gray2_hex = f"#{gray2:02x}{gray2:02x}{gray2:02x}"
+                try:
+                    icon_lbl.configure(text_color=f"#{int(0x44 * alpha_pct):02x}{int(0x44 * alpha_pct):02x}{int(0x44 * alpha_pct):02x}" if step < 2 else gray_hex)
+                    title_lbl.configure(text_color=gray_hex)
+                    empty_lbl.configure(text_color=gray2_hex)
+                except: pass
+                self.after(30, lambda: _fade_in(step + 1, total))
+            _fade_in()
             
             if hasattr(self, 'lbl_server_count') and self.lbl_server_count.winfo_exists():
                 self.lbl_server_count.configure(text="0 servidores")
@@ -2147,6 +2989,26 @@ del "%~f0"
             # Main Card
             card = ctk.CTkFrame(self.scroll_servers, fg_color="#18181A", border_width=1, border_color="#2b2b2f", corner_radius=12)
             card.pack(fill="x", pady=8, padx=10)
+
+            # Glow hover effect robusto
+            def _on_enter(e, c=card):
+                try: c.configure(border_color=COLOR_RUST_RED)
+                except: pass
+                
+            def _on_leave(e, c=card):
+                try:
+                    x, y = c.winfo_pointerxy()
+                    cx, cy = c.winfo_rootx(), c.winfo_rooty()
+                    cw, ch = c.winfo_width(), c.winfo_height()
+                    if not (cx <= x <= cx + cw and cy <= y <= cy + ch):
+                        c.configure(border_color="#2b2b2f")
+                except: pass
+                
+            def bind_hover(widget):
+                widget.bind("<Enter>", _on_enter, add="+")
+                widget.bind("<Leave>", _on_leave, add="+")
+                for child in widget.winfo_children():
+                    bind_hover(child)
             
             # --- TOP SECTION (Avatar + Title + Favorite) ---
             top_frame = ctk.CTkFrame(card, fg_color="transparent")
@@ -2166,8 +3028,10 @@ del "%~f0"
             lbl_alias = ctk.CTkLabel(titles_frame, text=alias.upper(), font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"), text_color="white", anchor="w")
             lbl_alias.pack(fill="x")
             
-            lbl_subtitle = ctk.CTkLabel(titles_frame, text="Consultando servidor...", font=self.font_small, text_color="#aaaaaa", anchor="w")
+            lbl_subtitle = ctk.CTkLabel(titles_frame, text="                           ", font=self.font_small, text_color="#2b2b2f", fg_color="#2b2b2f", corner_radius=4, anchor="w")
             lbl_subtitle.pack(fill="x")
+            
+            self._register_skeleton(lbl_subtitle)
             
             # Favorite Star
             def toggle_fav_cmd(target_alias=alias):
@@ -2189,14 +3053,17 @@ del "%~f0"
             status_badge = ctk.CTkLabel(mid_frame, text=" COMPROBANDO ", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), fg_color="#333333", text_color="#aaaaaa", corner_radius=6, height=26, width=90)
             status_badge.pack(side="left")
             
-            lbl_ping = ctk.CTkLabel(mid_frame, text="Ping: --", font=ctk.CTkFont(size=11, weight="bold"), text_color="#888")
+            lbl_ping = ctk.CTkLabel(mid_frame, text="        ", font=ctk.CTkFont(size=11, weight="bold"), text_color="#2b2b2f", fg_color="#2b2b2f", corner_radius=4)
             lbl_ping.pack(side="left", padx=10)
             
             lbl_wipe = ctk.CTkLabel(mid_frame, text="", font=ctk.CTkFont(size=11), text_color="#aaaaaa")
             lbl_wipe.pack(side="left", padx=(0, 10))
             
-            lbl_players = ctk.CTkLabel(mid_frame, text="--/-- PLAYERS", font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"), text_color="#dddddd")
+            lbl_players = ctk.CTkLabel(mid_frame, text="              ", font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"), text_color="#2b2b2f", fg_color="#2b2b2f", corner_radius=4)
             lbl_players.pack(side="right")
+
+            self._register_skeleton(lbl_ping)
+            self._register_skeleton(lbl_players)
             
             # --- ACTION SECTION (Join Server) ---
             action_frame = ctk.CTkFrame(card, fg_color="transparent")
@@ -2260,6 +3127,9 @@ del "%~f0"
 
             # Launch async data fetcher
             self._fetch_server_data_async(ip, lbl_subtitle, status_badge, lbl_players, lbl_ping, lbl_wipe, lbl_avatar)
+            
+            # Aplicar eventos de hover recursivamente a la tarjeta
+            bind_hover(card)
 
     def _fetch_server_data_async(self, ip, lbl_subtitle, status_badge, lbl_players, lbl_ping, lbl_wipe, lbl_avatar):
         """Query A2S for players/name and ping for latency in a background thread."""
@@ -2269,7 +3139,7 @@ del "%~f0"
             port = int(ip.split(":")[1]) if ":" in ip else 28015
             
             a2s_data = None
-            for test_port in list(dict.fromkeys([port, port + 1, port + 15])):
+            for test_port in list(dict.fromkeys([port, port + 1, port + 15, 28015])):
                 if a2s_data is not None: break
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 sock.settimeout(1.0)
@@ -2415,26 +3285,33 @@ del "%~f0"
                         elif base_text.endswith("Wip"):
                             base_text += "es"
                             
-                        lbl_subtitle.configure(text=base_text)
-                        lbl_players.configure(text=a2s_data["players_text"])
+                        # Parar esqueletos y mostrar datos
+                        self._unregister_skeleton(lbl_subtitle)
+                        self._unregister_skeleton(lbl_players)
+                        lbl_subtitle.configure(text=base_text, text_color="#aaaaaa", fg_color="transparent")
+                        lbl_players.configure(text=a2s_data["players_text"], text_color="#dddddd", fg_color="transparent")
+                        
                         if wipe_info:
-                            lbl_wipe.configure(text=f"•   {wipe_info}")
+                            lbl_wipe.configure(text=f"    {wipe_info}")
                         else:
                             lbl_wipe.configure(text="")
                     else:
-                        lbl_subtitle.configure(text="Rust Server (A2S Unreachable)")
-                        lbl_players.configure(text="--/-- PLAYERS")
+                        self._unregister_skeleton(lbl_subtitle)
+                        self._unregister_skeleton(lbl_players)
+                        lbl_subtitle.configure(text="Rust Server (A2S Unreachable)", text_color="#aaaaaa", fg_color="transparent")
+                        lbl_players.configure(text="--/-- PLAYERS", text_color="#dddddd", fg_color="transparent")
                         lbl_wipe.configure(text="")
                         
+                    self._unregister_skeleton(lbl_ping)
                     if a2s_data:
                         status_badge.configure(text=" ACTIVE ● ", fg_color="#28a745", text_color="white")
-                        lbl_ping.configure(text=f"Ping: {ms}ms" if ms else "Ping: <1ms")
+                        lbl_ping.configure(text=f"Ping: {ms}ms" if ms else "Ping: <1ms", text_color="#888", fg_color="transparent")
                     elif is_online:
                         status_badge.configure(text=" HOST OK ", fg_color="#e8a020", text_color="white")
-                        lbl_ping.configure(text=f"Ping: {ms}ms" if ms else "Ping: <1ms")
+                        lbl_ping.configure(text=f"Ping: {ms}ms" if ms else "Ping: <1ms", text_color="#888", fg_color="transparent")
                     else:
-                        status_badge.configure(text=" OFFLINE ", fg_color="#dc3545", text_color="white")
-                        lbl_ping.configure(text="Ping: Timeout")
+                        status_badge.configure(text=" OFFLINE ", fg_color="#d9534f", text_color="white")
+                        lbl_ping.configure(text="Ping: FAIL", text_color="#d9534f", fg_color="transparent")
                         
                     if pil_image:
                         import customtkinter as ctk
@@ -2601,7 +3478,7 @@ del "%~f0"
                                  capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
             
             if res.returncode == 0:
-                styled_showinfo(self, "Programado", f"¡Listo! El PC se despertará y reiniciará a las {h}:{m}.\n\nRECUERDA: Ahora debes darle a 'Suspender' o 'Hibernar' en Windows.")
+                ToastNotification.show(self, f"Despertador a las {h}:{m} programado", "success")
                 self.settings["wake_method"] = "software"
                 self.save_settings()
                 self.check_status()
@@ -2745,7 +3622,10 @@ del "%~f0"
             border_color="#2b2b2f",
             border_width=1,
             text_color="#cccccc",
-            activate_scrollbars=True
+            activate_scrollbars=True,
+            scrollbar_button_color="#333",
+            scrollbar_button_hover_color="#555",
+            corner_radius=0
         )
         self.log_textbox.grid(row=1, column=0, sticky="nsew", padx=20, pady=5)
         
@@ -2827,7 +3707,7 @@ del "%~f0"
         discord_page.grid_rowconfigure(0, weight=1)
         
         # Inner Frame
-        inner = ctk.CTkFrame(discord_page, fg_color="#18191c", corner_radius=15, border_width=1, border_color="#5865F2")
+        inner = ctk.CTkFrame(discord_page, fg_color="#18191c", corner_radius=15, border_width=2, border_color="#5865F2")
         inner.grid(row=0, column=0, padx=40, pady=40, sticky="nsew")
         
         inner.grid_columnconfigure(0, weight=1)
@@ -2836,8 +3716,45 @@ del "%~f0"
         icon_lbl = ctk.CTkLabel(inner, text="\uE8F2", font=ctk.CTkFont(family="Segoe UI", size=64), text_color="#5865F2")
         icon_lbl.grid(row=1, column=0, pady=(0, 0))
         
-        title = ctk.CTkLabel(inner, text="UNIRSE AL DISCORD", font=ctk.CTkFont(size=28, weight="bold"), text_color="white")
+        # Efecto Hover
+        def _on_enter(e): icon_lbl.configure(text_color="#7289da")
+        def _on_leave(e): icon_lbl.configure(text_color="#5865F2")
+        icon_lbl.bind("<Enter>", _on_enter)
+        icon_lbl.bind("<Leave>", _on_leave)
+        
+        title = ctk.CTkLabel(inner, text="", font=ctk.CTkFont(size=28, weight="bold"), text_color="white")
         title.grid(row=2, column=0, pady=(10, 0), sticky="n")
+        
+        full_text = "UNIRSE AL DISCORD"
+        def typewriter(i=0):
+            if not title.winfo_exists(): return
+            if i <= len(full_text):
+                title.configure(text=full_text[:i] + ("|" if i % 2 == 0 else ""))
+                self.after(50, lambda: typewriter(i+1))
+            else:
+                title.configure(text=full_text)
+                
+        def on_map(e):
+            if title.cget("text") != full_text:
+                title.configure(text="")
+                typewriter(0)
+                
+        inner.bind("<Map>", on_map)
+        
+        # Animación de respiración en el borde
+        def breathing_border(step=0):
+            if not inner.winfo_exists(): return
+            import math
+            factor = (math.sin(step * 0.1) + 1) / 2
+            r = int(0x2c + (0x58 - 0x2c) * factor)
+            g = int(0x33 + (0x65 - 0x33) * factor)
+            b = int(0x7a + (0xf2 - 0x7a) * factor)
+            color = f"#{r:02x}{g:02x}{b:02x}"
+            try: inner.configure(border_color=color)
+            except: pass
+            self.after(50, lambda: breathing_border(step+1))
+            
+        breathing_border(0)
         
         desc = ctk.CTkLabel(inner, text="Únete a la comunidad oficial.\nRecibe soporte técnico, enterate de actualizaciones\ny participa en el desarrollo de la herramienta.", font=ctk.CTkFont(size=15), text_color="#aaaaaa")
         desc.grid(row=3, column=0, pady=0, sticky="n")
@@ -2845,7 +3762,7 @@ del "%~f0"
         import webbrowser
         btn_join = ctk.CTkButton(
             inner, 
-            text="Abrir Discord", 
+            text="ABRIR DISCORD", 
             fg_color="#5865F2", 
             hover_color="#4752C4", 
             font=ctk.CTkFont(size=15, weight="bold"), 
@@ -2923,6 +3840,36 @@ del "%~f0"
             except Exception as e:
                 styled_showerror(self, "Error", f"No se pudo limpiar el archivo: {e}")
 
+    def _add_press_effect(self, btn):
+        """Micro-interacción: oscurece el botón al pulsar y restaura al soltar."""
+        try:
+            orig_color = btn.cget("fg_color")
+            orig_hover = btn.cget("hover_color")
+
+            def _darken(hex_color, factor=0.7):
+                try:
+                    h = hex_color.lstrip('#')
+                    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+                    return f'#{int(r*factor):02x}{int(g*factor):02x}{int(b*factor):02x}'
+                except:
+                    return hex_color
+
+            def _on_press(e):
+                try:
+                    c = btn.cget("fg_color")
+                    if isinstance(c, (list, tuple)): c = c[0]
+                    btn.configure(fg_color=_darken(c, 0.75))
+                except: pass
+
+            def _on_release(e):
+                try: btn.configure(fg_color=orig_color, hover_color=orig_hover)
+                except: pass
+
+            btn.bind("<ButtonPress-1>", _on_press)
+            btn.bind("<ButtonRelease-1>", _on_release)
+        except Exception:
+            pass
+
     def switch_page(self, page_id):
         if self.active_page == page_id:
             return
@@ -2942,6 +3889,12 @@ del "%~f0"
             return
             
         self.active_page = page_id
+        
+        target_height = 810 if page_id == "snipe" else 740
+        if self.winfo_height() != target_height:
+            w = self.winfo_width()
+            if w <= 1: w = 820
+            self.geometry(f"{w}x{target_height}")
         
         if page_id == "logs":
             self.refresh_log_viewer()
@@ -2969,86 +3922,225 @@ del "%~f0"
             
         animate(1)
 
-def run_smart_wipe_daemon(ip):
-    """Monitor in background for wipe restarts."""
-    import time, socket, re, subprocess, logging, sys
-    
-    logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format="%(asctime)s [WIPE_DAEMON] %(message)s")
-    logger = logging.getLogger("SmartWipe")
-    
-    logger.info("Iniciando Smart Wipe Daemon para IP: %s", ip)
-    
-    host = ip.split(":")[0] if ":" in ip else ip
-    port = int(ip.split(":")[1]) if ":" in ip else 28015
-    
-    def check_online():
-        for test_port in list(dict.fromkeys([port, port + 1, port + 15])):
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(1.5)
-            try:
-                sock.sendto(b'\xFF\xFF\xFF\xFFTSource Engine Query\x00', (host, test_port))
-                data, _ = sock.recvfrom(4096)
-                if data.startswith(b'\xFF\xFF\xFF\xFFI'):
-                    try:
-                        idx = 5
-                        for _ in range(4): idx = data.find(b'\x00', idx) + 1
-                        idx += 9
-                        idx = data.find(b'\x00', idx) + 1
-                        if idx < len(data):
-                            edf = data[idx]
-                            idx += 1
-                            if edf & 0x80:
-                                import struct
-                                reported_port = struct.unpack_from('<H', data, idx)[0]
-                                if test_port != port and reported_port != port: 
-                                    continue
-                    except: pass
-                    return True
-            except Exception: pass
-            finally: sock.close()
-        return False
-
-    # Fase 1: Esperar a que el servidor SE APAGUE
-    logger.info("Fase 1: Comprobando estado actual...")
-    
-    if check_online():
-        logger.info("El servidor está ONLINE. Esperando a que se APAGUE para el wipe...")
-        failed_pings = 0
-        while True:
-            if not check_online():
-                failed_pings += 1
-                if failed_pings >= 3:
-                    break
-            else:
-                failed_pings = 0
-            time.sleep(4.0)
-    
-    logger.info("El servidor está OFFLINE. (Wipe en proceso...)")
-    
-    # Fase 2: Esperar a que vuelva ONLINE
-    logger.info("Fase 2: Esperando a que el servidor vuelva a estar ONLINE...")
-    
-    while True:
-        if check_online():
-            break
-        time.sleep(1.0)
+    # ================================================================
+    #  RECONEXIÓN INTELIGENTE (Easter Egg - 7 clics en versión)
+    # ================================================================
+    def _on_version_click(self, event=None):
+        """Easter egg: 7 clics rápidos en la versión abren el panel oculto de reconexión."""
+        self._version_clicks += 1
         
-    logger.info("¡SERVIDOR ONLINE! Lanzando Rust inmediatamente...")
-    
-    try:
-        import winsound
-        winsound.Beep(1000, 300)
-        time.sleep(0.1)
-        winsound.Beep(1500, 600)
-    except: pass
+        if self._version_click_timer:
+            self.after_cancel(self._version_click_timer)
+        
+        if self._version_clicks >= 7:
+            self._version_clicks = 0
+            self._toggle_reconnect_panel()
+        else:
+            # Reset después de 2 segundos sin clics
+            self._version_click_timer = self.after(2000, self._reset_version_clicks)
 
-    subprocess.Popen(['explorer.exe', f'steam://run/252490//+connect%20{ip}%20+aq%20{int(time.time())}'], creationflags=subprocess.CREATE_NO_WINDOW)
-    logger.info("Misión cumplida. Cerrando daemon.")
-    sys.exit(0)
+    def _reset_version_clicks(self):
+        self._version_clicks = 0
+
+    def _toggle_reconnect_panel(self):
+        """Muestra u oculta el panel de reconexión oculto."""
+        if self._reconnect_panel_visible:
+            self._reconnect_frame.pack_forget()
+            self._reconnect_panel_visible = False
+            self._lbl_version.configure(text_color="#555555")
+        else:
+            self._reconnect_frame.pack(side="bottom", fill="x", padx=8, pady=(0, 5), before=self._lbl_version)
+            self._reconnect_panel_visible = True
+            self._lbl_version.configure(text_color="#8888ff")
+            ToastNotification.show(self, "🔓 Modo Reconexión desbloqueado", "success")
+
+    def _on_reconnect_toggle(self):
+        """Callback cuando se activa/desactiva el switch de reconexión."""
+        enabled = self._rc_toggle_var.get()
+        self.settings["reconnect_enabled"] = enabled
+        self.save_settings()
+        
+        if enabled:
+            self._start_reconnect_loop()
+            ToastNotification.show(self, f"🔄 Reconexión activa ({self._reconnect_interval} min)", "success")
+        else:
+            self._stop_reconnect_loop()
+            ToastNotification.show(self, "Reconexión desactivada", "info")
+
+    def _on_reconnect_interval_change(self, value):
+        """Callback cuando se cambia el slider de intervalo."""
+        interval = int(round(value))
+        self._reconnect_interval = interval
+        self._rc_interval_label.configure(text=f"{interval} min")
+        self.settings["reconnect_interval"] = interval
+        self.save_settings()
+        
+        # Si está activo, reiniciar el loop con el nuevo intervalo
+        if self._reconnect_active:
+            self._stop_reconnect_loop()
+            self._start_reconnect_loop()
+
+    def _start_reconnect_loop(self):
+        """Inicia el loop de reconexión inteligente."""
+        self._reconnect_active = True
+        logger.info("Reconnect loop iniciado: cada %d minutos", self._reconnect_interval)
+        
+        # Mostrar ventana de aviso
+        if self._reconnect_toplevel is None or not self._reconnect_toplevel.winfo_exists():
+            self._reconnect_toplevel = ctk.CTkToplevel(self)
+            self._reconnect_toplevel.title("Auto-Queue: Vigilando")
+            self._reconnect_toplevel.geometry("380x100")
+            self._reconnect_toplevel.attributes("-topmost", True)
+            self._reconnect_toplevel.resizable(False, False)
+            
+            # Quitar de la barra de tareas (hacerla tool window)
+            try:
+                self._reconnect_toplevel.after(10, lambda: self._reconnect_toplevel.wm_attributes("-toolwindow", True))
+            except Exception:
+                pass
+
+            lbl_title = ctk.CTkLabel(self._reconnect_toplevel, text="🛡️ Vigilando conexión de Rust...", font=ctk.CTkFont(size=14, weight="bold"), text_color="#a8a8ff")
+            lbl_title.pack(pady=(15, 5))
+            lbl_desc = ctk.CTkLabel(self._reconnect_toplevel, text="Si cierras esta ventana o el programa principal,\nla reconexión inteligente dejará de funcionar.", font=ctk.CTkFont(size=11), text_color="#aaaaaa")
+            lbl_desc.pack()
+            
+            # Si cierran la ventanita, desactivamos la reconexión
+            def on_close():
+                self._rc_toggle_var.set(False)
+                self._on_reconnect_toggle()
+            
+            self._reconnect_toplevel.protocol("WM_DELETE_WINDOW", on_close)
+        
+        self._reconnect_tick()
+
+    def _stop_reconnect_loop(self):
+        """Detiene el loop de reconexión."""
+        self._reconnect_active = False
+        if self._reconnect_job:
+            try:
+                self.after_cancel(self._reconnect_job)
+            except Exception:
+                pass
+            self._reconnect_job = None
+            
+        if self._reconnect_toplevel and self._reconnect_toplevel.winfo_exists():
+            self._reconnect_toplevel.destroy()
+            self._reconnect_toplevel = None
+            
+        logger.info("Reconnect loop detenido")
+
+    def _reconnect_tick(self):
+        """Ejecuta una comprobación de reconexión y programa la siguiente."""
+        if not self._reconnect_active:
+            return
+        
+        import threading
+        threading.Thread(target=self._do_reconnect_check, daemon=True).start()
+        
+        # Programar siguiente tick
+        interval_ms = self._reconnect_interval * 60 * 1000
+        self._reconnect_job = self.after(interval_ms, self._reconnect_tick)
+
+    def _do_reconnect_check(self):
+        """Comprueba si Rust se ha desconectado del servidor y reconecta si es necesario."""
+        import subprocess
+        
+        # Obtener la IP del servidor activo
+        ip = ""
+        try:
+            ip = self.get_current_ip_from_entry()
+        except Exception:
+            pass
+        
+        if not ip:
+            # Intentar obtener del .bat
+            try:
+                ip = self.get_active_ip_from_bat()
+            except Exception:
+                pass
+        
+        if not ip:
+            logger.info("Reconnect: No hay IP configurada, saltando")
+            return
+        
+        # Comprobar si Rust está corriendo
+        try:
+            result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq RustClient.exe', '/NH'],
+                                  capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            rust_running = 'rustclient.exe' in result.stdout.lower()
+        except Exception:
+            rust_running = False
+        
+        if not rust_running:
+            logger.info("Reconnect: Rust no está corriendo. No hago nada.")
+            return
+        
+        # Rust está corriendo - comprobar el log de Rust para detectar desconexiones
+        # El log está en: %USERPROFILE%\AppData\LocalLow\Facepunch Studios LTD\Rust\output_log.txt
+        # También puede estar en: %LOCALAPPDATA%Low\Facepunch Studios LTD\Rust\Player.log
+        import os
+        rust_log_paths = [
+            os.path.join(os.environ.get('USERPROFILE', ''), 'AppData', 'LocalLow', 'Facepunch Studios LTD', 'Rust', 'Player.log'),
+            os.path.join(os.environ.get('USERPROFILE', ''), 'AppData', 'LocalLow', 'Facepunch Studios LTD', 'Rust', 'output_log.txt'),
+        ]
+        
+        log_content = ""
+        for log_path in rust_log_paths:
+            try:
+                if os.path.exists(log_path):
+                    # Leer las últimas líneas del log (últimos 10KB)
+                    with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        f.seek(max(0, os.path.getsize(log_path) - 10240))
+                        log_content = f.read()
+                    if log_content:
+                        break
+            except Exception as e:
+                logger.debug("Reconnect: Error leyendo log %s: %s", log_path, e)
+        
+        if not log_content:
+            logger.info("Reconnect: No se pudo leer el log de Rust, saltando check")
+            return
+        
+        # Buscar señales de desconexión en las últimas líneas del log
+        lines = log_content.splitlines()
+        last_lines = lines[-50:] if len(lines) > 50 else lines
+        
+        disconnected = False
+        was_connected = False
+        
+        for line in last_lines:
+            lower = line.lower()
+            # Indicadores de que estaba/está conectado
+            if 'connected' in lower and 'disconnect' not in lower:
+                was_connected = True
+                disconnected = False  # Reset si volvió a conectar
+            # Indicadores de desconexión
+            if any(kw in lower for kw in ['disconnected', 'connection lost', 'timed out', 'timeout', 'kicked']):
+                disconnected = True
+        
+        if disconnected and was_connected:
+            logger.info("Reconnect: Desconexión detectada en log de Rust, reconectando via Steam a %s", ip)
+            self.after(0, lambda: self._reconnect_via_steam(ip))
+        elif not was_connected:
+            logger.info("Reconnect: Rust abierto pero no parece haber estado conectado (menú principal), saltando")
+        else:
+            logger.info("Reconnect: Rust conectado, todo OK")
+
+    def _reconnect_via_steam(self, ip):
+        """Reconecta lanzando la URL steam://run/ que fuerza a Rust a conectar al servidor."""
+        import subprocess
+        try:
+            cmd = self._get_steam_launch_cmd(ip, as_list=True)
+            subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW)
+            logger.info("Reconnect: Lanzado steam://run/ para reconectar a: %s", ip)
+        except Exception as e:
+            logger.error("Reconnect: Error lanzando Steam: %s", e)
+
 
 if __name__ == "__main__":
     if len(sys.argv) > 2 and sys.argv[1] == "--smart-wipe":
-        run_smart_wipe_daemon(sys.argv[2])
+        app = App(smart_wipe_ip=sys.argv[2])
+        app.mainloop()
     else:
         app = App()
         app.mainloop()
