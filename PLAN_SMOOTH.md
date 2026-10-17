@@ -268,3 +268,15 @@ Seguir este orden para ver resultados incrementales:
 5. **Hilos para tareas pesadas:** Toda consulta A2S, ping, registro de Windows o petición HTTP debe ejecutarse en `threading.Thread` con `daemon=True`.
 6. **Usar `self.after(0, callback)` para actualizar UI desde hilos:** Nunca modificar widgets desde un hilo secundario.
 7. **No reinventar diálogos:** Para confirmaciones y errores críticos, seguir usando `styled_askyesno` y `styled_showerror`. Los toasts son solo para feedback no crítico.
+
+---
+
+## 🚀 PRÓXIMAS FUNCIONALIDADES FUTURAS (ROADMAP DE IDEAS)
+
+| Feature | Descripción | Método/Técnica | Status |
+|:---|:---|:---|:---|
+| **1. Notificación Discord al Entrar** | Detectar cambio de estado de Cola -> Dentro del servidor y enviar webhook a Discord | Captura y análisis de pantalla (Pillow) / ROI de HUD vs Cola | 📌 Pendiente calibrar con `test_screen_detect.py` |
+| **2. Historial de Servidores** | Guardar los últimos X servidores usados en `config.json` para selección rápida | Array circular en JSON + Dropdown / Quick Select | 📌 Registrado |
+| **3. Estado de Cola en Tiempo Real** | Mostrar cuánta gente hay en cola directamente en la UI | Consultas A2S query periódicas | 📌 Registrado |
+| **4. Web Dashboard** | Panel de control web para gestionar / ver estado remotamente | Proyecto `Auto-queue-web` (React/Vite) | 📌 Registrado |
+| **5. Auto-actualización de la App** | Descarga e instalación automática cuando sale nueva versión en GitHub Releases | Verificación de versión + downloader script/exe | 📌 Registrado |

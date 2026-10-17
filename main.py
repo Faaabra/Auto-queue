@@ -4042,99 +4042,60 @@ del "%~f0"
         self._reconnect_job = self.after(interval_ms, self._reconnect_tick)
 
     def _do_reconnect_check(self):
-        """Comprueba si Rust se ha desconectado del servidor y reconecta si es necesario."""
+        """Comprueba si Rust esta corriendo y manda reconexion.
+
+        Rust ignora steam://run/+connect si ya estas en cola o dentro del servidor.
+        Solo actua si estas en el menu principal (kickeado por timeout/corte).
+        Comportamiento confirmado por tests reales.
+        """
         import subprocess
-        
-        # Obtener la IP del servidor activo
+
+        # Obtener la IP del servidor configurado
         ip = ""
         try:
             ip = self.get_current_ip_from_entry()
         except Exception:
             pass
-        
+
         if not ip:
-            # Intentar obtener del .bat
             try:
                 ip = self.get_active_ip_from_bat()
             except Exception:
                 pass
-        
+
         if not ip:
             logger.info("Reconnect: No hay IP configurada, saltando")
             return
-        
-        # Comprobar si Rust está corriendo
+
+        # Comprobar si Rust esta corriendo
         try:
-            result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq RustClient.exe', '/NH'],
-                                  capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            result = subprocess.run(
+                ['tasklist', '/FI', 'IMAGENAME eq RustClient.exe', '/NH'],
+                capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW
+            )
             rust_running = 'rustclient.exe' in result.stdout.lower()
         except Exception:
             rust_running = False
-        
+
         if not rust_running:
-            logger.info("Reconnect: Rust no está corriendo. No hago nada.")
+            logger.info("Reconnect: Rust no esta corriendo, nada que hacer")
             return
-        
-        # Rust está corriendo - comprobar el log de Rust para detectar desconexiones
-        # El log está en: %USERPROFILE%\AppData\LocalLow\Facepunch Studios LTD\Rust\output_log.txt
-        # También puede estar en: %LOCALAPPDATA%Low\Facepunch Studios LTD\Rust\Player.log
-        import os
-        rust_log_paths = [
-            os.path.join(os.environ.get('USERPROFILE', ''), 'AppData', 'LocalLow', 'Facepunch Studios LTD', 'Rust', 'Player.log'),
-            os.path.join(os.environ.get('USERPROFILE', ''), 'AppData', 'LocalLow', 'Facepunch Studios LTD', 'Rust', 'output_log.txt'),
-        ]
-        
-        log_content = ""
-        for log_path in rust_log_paths:
-            try:
-                if os.path.exists(log_path):
-                    # Leer las últimas líneas del log (últimos 10KB)
-                    with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        f.seek(max(0, os.path.getsize(log_path) - 10240))
-                        log_content = f.read()
-                    if log_content:
-                        break
-            except Exception as e:
-                logger.debug("Reconnect: Error leyendo log %s: %s", log_path, e)
-        
-        if not log_content:
-            logger.info("Reconnect: No se pudo leer el log de Rust, saltando check")
-            return
-        
-        # Buscar señales de desconexión en las últimas líneas del log
-        lines = log_content.splitlines()
-        last_lines = lines[-50:] if len(lines) > 50 else lines
-        
-        disconnected = False
-        was_connected = False
-        
-        for line in last_lines:
-            lower = line.lower()
-            # Indicadores de que estaba/está conectado
-            if 'connected' in lower and 'disconnect' not in lower:
-                was_connected = True
-                disconnected = False  # Reset si volvió a conectar
-            # Indicadores de desconexión
-            if any(kw in lower for kw in ['disconnected', 'connection lost', 'timed out', 'timeout', 'kicked']):
-                disconnected = True
-        
-        if disconnected and was_connected:
-            logger.info("Reconnect: Desconexión detectada en log de Rust, reconectando via Steam a %s", ip)
-            self.after(0, lambda: self._reconnect_via_steam(ip))
-        elif not was_connected:
-            logger.info("Reconnect: Rust abierto pero no parece haber estado conectado (menú principal), saltando")
-        else:
-            logger.info("Reconnect: Rust conectado, todo OK")
+
+        # Rust abierto -> mandar reconexion
+        # Si estas en cola o servidor -> Rust LO IGNORA (sin efecto)
+        # Si te kickearon al menu -> Rust RECONECTA al servidor
+        logger.info("Reconnect: Rust abierto, mandando +connect a %s", ip)
+        self.after(0, lambda: self._reconnect_via_steam(ip))
 
     def _reconnect_via_steam(self, ip):
-        """Reconecta lanzando la URL steam://run/ que fuerza a Rust a conectar al servidor."""
+        """Reconecta lanzando steam://run/+connect IP."""
         import subprocess
         try:
             cmd = self._get_steam_launch_cmd(ip, as_list=True)
             subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW)
-            logger.info("Reconnect: Lanzado steam://run/ para reconectar a: %s", ip)
+            logger.info("Reconnect: steam://run/+connect lanzado a: %s", ip)
         except Exception as e:
-            logger.error("Reconnect: Error lanzando Steam: %s", e)
+            logger.error("Reconnect: Error: %s", e)
 
 
 if __name__ == "__main__":
