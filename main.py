@@ -9,6 +9,15 @@ import json
 import re
 import tkinter as tk
 import winreg
+from autoqueue_ui.design import install_theme
+from autoqueue_ui.home import build_home
+from autoqueue_ui.servers import build_servers
+from autoqueue_ui.snipe import build_snipe
+from autoqueue_ui.notifications import show_toast
+from concurrent.futures import ThreadPoolExecutor
+from logging.handlers import RotatingFileHandler
+from autoqueue_core.storage import load_json, save_json, read_json
+from autoqueue_core.validation import normalize_address, validate_servers, validate_settings, is_newer_version
 
 # =========================================================
 # SMOOTH SCROLL PATCH PARA CUSTOMTKINTER
@@ -89,7 +98,7 @@ def get_asset_path(filename):
         base_path = os.path.abspath(os.path.dirname(__file__))
     return os.path.join(base_path, filename)
 
-CURRENT_VERSION = "2.0.6"
+CURRENT_VERSION = "2.1.0"
 # --- INFO DE ACTUALIZACIONES ---
 GITHUB_REPO = "Faaabra/Auto-queue"
 
@@ -102,7 +111,7 @@ def is_admin():
     except Exception:
         return False
 
-if not is_admin():
+if __name__ == "__main__" and not is_admin():
     # Si no somos admin, reiniciamos el programa pidiendo elevación (UAC)
     if hasattr(sys, '_MEIPASS'):
         ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, "", None, 1)
@@ -111,16 +120,17 @@ if not is_admin():
     sys.exit()
 
 ctk.set_appearance_mode("dark")
+install_theme()
 
 # Colores personalizados
-COLOR_RUST_RED = "#ce422b"
-COLOR_RUST_HOVER = "#a3321f"
-COLOR_LIGHT_TEXT = "#d1d1d1"
-COLOR_DARK_FRAME = "#1e1e1e"
-COLOR_BLUE = "#4db8ff"
-COLOR_GREEN = "#28a745"
-COLOR_YELLOW = "#ffcc00"
-COLOR_INACTIVE = "#888888"
+COLOR_RUST_RED = "#df7957"
+COLOR_RUST_HOVER = "#c96546"
+COLOR_LIGHT_TEXT = "#f1eee7"
+COLOR_DARK_FRAME = "#1b1e1d"
+COLOR_BLUE = "#a0bbbe"
+COLOR_GREEN = "#9dbb9d"
+COLOR_YELLOW = "#d9bc7d"
+COLOR_INACTIVE = "#a6aea7"
 
 # Regex para validar formato IP/Dominio con o sin puerto
 IP_PORT_RE = re.compile(r'^[a-zA-Z0-9._-]+(?::\d+)?$')
@@ -131,11 +141,10 @@ if not os.path.exists(APPDATA_DIR):
     os.makedirs(APPDATA_DIR)
 LOG_FILE = os.path.join(APPDATA_DIR, "activity.log")
 logging.basicConfig(
-    filename=LOG_FILE,
+    handlers=[RotatingFileHandler(LOG_FILE, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8")],
     level=logging.INFO,
     format="%(asctime)s  %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
-    encoding="utf-8"
 )
 logger = logging.getLogger("RustAutoQueue")
 
@@ -173,7 +182,7 @@ class Tooltip:
         self.tip_window = tw = tk.Toplevel(self.widget)
         tw.wm_overrideredirect(True)
         tw.wm_geometry(f"+{x}+{y}")
-        label = tk.Label(tw, text=self.text, background="#2a2a2a", foreground="#cccccc",
+        label = tk.Label(tw, text=self.text, background="#2a2a2a", foreground="#c9cfc8",
                          relief="flat", font=("Segoe UI", 11), padx=10, pady=6,
                          wraplength=300, justify="left")
         label.pack()
@@ -190,67 +199,7 @@ class Tooltip:
 # ===================================================================
 
 class ToastNotification:
-    """
-    Notificación flotante no-bloqueante (Toast)
-    Aparece en la esquina inferior derecha con animación de slide.
-    """
-    @staticmethod
-    def show(parent, message, toast_type="success", duration=3000):
-        try:
-            colors = {
-                "success": "#28a745",
-                "info": "#4db8ff",
-                "error": "#ce422b",
-                "warning": "#ffcc00"
-            }
-            color = colors.get(toast_type, "#28a745")
-            icons = {
-                "success": "✓",
-                "info": "ℹ",
-                "error": "✗",
-                "warning": "⚠"
-            }
-            icon = icons.get(toast_type, "✓")
-            
-            toast = ctk.CTkFrame(parent, fg_color="#1a1a1c", corner_radius=8, border_color=color, border_width=1)
-            
-            lbl_icon = ctk.CTkLabel(toast, text=icon, font=ctk.CTkFont(size=14, weight="bold"), text_color=color)
-            lbl_icon.pack(side="left", padx=(15, 5), pady=10)
-            
-            lbl_text = ctk.CTkLabel(toast, text=message, font=ctk.CTkFont(family="Segoe UI", size=13), text_color="white")
-            lbl_text.pack(side="left", padx=(0, 15), pady=10)
-            
-            toast.lift()
-            
-            steps = 15
-            start_y = 1.05
-            end_y = 0.95
-            
-            def slide_in(step=0):
-                if not toast.winfo_exists(): return
-                progress = step / steps
-                current_y = start_y - (start_y - end_y) * (1.0 - (1.0 - progress)**3)
-                toast.place(relx=0.95, rely=current_y, anchor="se")
-                
-                if step < steps:
-                    parent.after(16, lambda: slide_in(step + 1))
-                else:
-                    parent.after(duration, slide_out)
-                    
-            def slide_out(step=0):
-                if not toast.winfo_exists(): return
-                progress = step / steps
-                current_y = end_y + (start_y - end_y) * (progress**2)
-                toast.place(relx=0.95, rely=current_y, anchor="se")
-                
-                if step < steps:
-                    parent.after(16, lambda: slide_out(step + 1))
-                else:
-                    toast.destroy()
-                    
-            slide_in()
-        except Exception as e:
-            pass
+    show = staticmethod(show_toast)
 
 
 class RadarCanvas(tk.Canvas):
@@ -269,12 +218,12 @@ class RadarCanvas(tk.Canvas):
         'idle':            'Esperando objetivo...',
         'waiting_offline': 'Fase 1 — Servidor ONLINE, esperando wipe...',
         'offline':         'Fase 2 — WIPE EN PROCESO — Escaneando...',
-        'connecting':      '¡SERVIDOR ONLINE! Conectando en 0ms...',
+        'connecting':      'Servidor disponible. Conectando…',
     }
 
     def __init__(self, parent, size=120, **kwargs):
         super().__init__(parent, width=size, height=size,
-                         bg='#0a0a0c', highlightthickness=0, **kwargs)
+                         bg='#151817', highlightthickness=0, **kwargs)
         self.size = size
         self.cx = size / 2
         self.cy = size / 2
@@ -316,6 +265,12 @@ class RadarCanvas(tk.Canvas):
         except:
             return
 
+        app = self.winfo_toplevel()
+        if self._state == 'idle' or getattr(app, 'active_page', None) != 'snipe' or getattr(app, 'settings', {}).get('reduce_motion', False):
+            if getattr(self, '_static_state', None) == (self._state, self._counter_text):
+                self.after(250, self._animate)
+                return
+        self._static_state = (self._state, self._counter_text)
         colors = self.STATE_COLORS.get(self._state, self.STATE_COLORS['idle'])
         label  = self.STATE_LABELS.get(self._state, '')
         s = self.size
@@ -331,7 +286,7 @@ class RadarCanvas(tk.Canvas):
 
         # Background ring
         self.create_oval(cx-ro, cy-ro, cx+ro, cy+ro,
-                         outline='#222224', width=10, fill='#0a0a0c')
+                         outline='#222224', width=10, fill='#151817')
 
         # Spinning arc (sweep 120°)
         self.create_arc(cx-ro, cy-ro, cx+ro, cy+ro,
@@ -346,7 +301,7 @@ class RadarCanvas(tk.Canvas):
                 self._pulse_dir = -1
             elif self._pulse_alpha <= 0.0:
                 self._pulse_dir = 1
-            p_color = self._hex_blend('#0a0a0c', colors['pulse'], self._pulse_alpha)
+            p_color = self._hex_blend('#151817', colors['pulse'], self._pulse_alpha)
             pr = ro - 5
             self.create_oval(cx-pr, cy-pr, cx+pr, cy+pr,
                              outline=p_color, width=2, fill='')
@@ -379,7 +334,7 @@ class RadarCanvas(tk.Canvas):
         self._angle = (self._angle + 4) % 360
 
         try:
-            self.after(16, self._animate)  # ~60fps
+            self.after(50, self._animate)  # capped at 20 fps; hidden/reduced states are static
         except:
             pass
 
@@ -407,7 +362,7 @@ class StyledDialog(ctk.CTkToplevel):
         # --- Window setup ---
         self.title(title)
         self.resizable(False, False)
-        self.configure(fg_color="#141416")
+        self.configure(fg_color="#171919")
         self.transient(parent)
         self.grab_set()
 
@@ -464,14 +419,14 @@ class StyledDialog(ctk.CTkToplevel):
         title_lbl.pack(side="left", fill="x", expand=True)
 
         # Divider line
-        divider = ctk.CTkFrame(container, fg_color="#2b2b2f", height=1)
+        divider = ctk.CTkFrame(container, fg_color="#303632", height=1)
         divider.pack(fill="x", pady=(0, 14))
 
         # Message body
         msg_lbl = ctk.CTkLabel(
             container, text=message,
             font=ctk.CTkFont(family="Segoe UI", size=13),
-            text_color="#cccccc", wraplength=w - 80,
+            text_color="#c9cfc8", wraplength=w - 80,
             justify="left", anchor="nw"
         )
         msg_lbl.pack(fill="x", pady=(0, 10))
@@ -481,7 +436,7 @@ class StyledDialog(ctk.CTkToplevel):
             self._entry = ctk.CTkEntry(
                 container, height=38,
                 font=ctk.CTkFont(family="Segoe UI", size=13),
-                fg_color="#1a1a1c", border_color="#333335",
+                fg_color="#222624", border_color="#303632",
                 placeholder_text=kwargs.get("placeholder", "")
             )
             self._entry.pack(fill="x", pady=(0, 14))
@@ -501,7 +456,7 @@ class StyledDialog(ctk.CTkToplevel):
             btn_cancel = ctk.CTkButton(
                 btn_frame, text="Cancelar", width=120, height=38,
                 fg_color="transparent", border_width=1, border_color="#444",
-                hover_color="#2b2b2b", text_color="#aaaaaa",
+                hover_color="#222624", text_color="#a6aea7",
                 font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
                 command=self._on_cancel
             )
@@ -519,7 +474,7 @@ class StyledDialog(ctk.CTkToplevel):
             btn_cancel = ctk.CTkButton(
                 btn_frame, text="Cancelar", width=120, height=38,
                 fg_color="transparent", border_width=1, border_color="#444",
-                hover_color="#2b2b2b", text_color="#aaaaaa",
+                hover_color="#222624", text_color="#a6aea7",
                 font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
                 command=self._on_cancel
             )
@@ -536,10 +491,10 @@ class StyledDialog(ctk.CTkToplevel):
         else:
             # Single "Entendido" button for info/warning/error
             btn_color = {
-                "info": "#333335",
+                "info": "#303632",
                 "warning": "#5a4a1a",
                 "error": COLOR_RUST_RED
-            }.get(dialog_type, "#333335")
+            }.get(dialog_type, "#303632")
 
             btn_hover = {
                 "info": "#444446",
@@ -557,7 +512,7 @@ class StyledDialog(ctk.CTkToplevel):
 
         # Escape to close
         self.bind("<Escape>", lambda e: self._on_cancel())
-        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        self.protocol("WM_Eliminar_WINDOW", self._on_cancel)
 
         # Focus
         self.after(100, lambda: btn_ok.focus_set() if dialog_type != "input" else None)
@@ -623,22 +578,28 @@ class App(ctk.CTk):
         
         self.smart_wipe_ip = smart_wipe_ip
 
-        self.title("Rust Auto-Queue Launcher - V2")
+        self.title("Auto-Queue · Rust")
         
         # Centrar en la pantalla (Landscape Dashboard layout)
-        window_width = 820
-        window_height = 740
+        window_width = min(1160, self.winfo_screenwidth() - 80)
+        window_height = min(870, self.winfo_screenheight() - 90)
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         x_cordinate = int((screen_width / 2) - (window_width / 2))
         y_cordinate = int((screen_height / 2) - (window_height / 2))
         
         self.geometry(f"{window_width}x{window_height}+{x_cordinate}+{y_cordinate}")
-        self.resizable(False, True)
+        self.resizable(True, True)
+        self.minsize(960, 680)
 
         if not os.path.exists(APPDATA_DIR):
             os.makedirs(APPDATA_DIR)
 
+        self._recovery_notices = []
+        self._closing = False
+        self._page_transition_id = 0
+        self._server_executor = ThreadPoolExecutor(max_workers=6, thread_name_prefix="server-query")
+        self._server_queries = []
         self.servers_data = self.load_servers()
         self.settings = self.load_settings()
 
@@ -646,10 +607,10 @@ class App(ctk.CTk):
         self.sys_domain = os.environ.get('USERDOMAIN', os.environ.get('COMPUTERNAME', ''))
 
         # Fuentes reutilizables
-        self.font_title = ctk.CTkFont(family="Segoe UI", size=36, weight="bold")
+        self.font_title = ctk.CTkFont(family="Segoe UI", size=28, weight="bold")
         self.font_subtitle = ctk.CTkFont(family="Segoe UI", size=14, weight="bold")
         self.font_label = ctk.CTkFont(family="Segoe UI", size=12, weight="bold")
-        self.font_text = ctk.CTkFont(family="Segoe UI", size=12)
+        self.font_text = ctk.CTkFont(family="Segoe UI", size=13)
         self.font_small = ctk.CTkFont(family="Segoe UI", size=11)
 
         if hasattr(sys, '_MEIPASS'):
@@ -686,15 +647,20 @@ class App(ctk.CTk):
         self.smart_bridge_lbl.pack(pady=5)
 
         # --- ESTRUCTURA PRINCIPAL (SIDEBAR + CONTENEDOR) ---
-        self.sidebar_frame = ctk.CTkFrame(self, width=170, corner_radius=0, fg_color="#141416")
+        self.sidebar_frame = ctk.CTkFrame(self, width=210, corner_radius=0, fg_color="#171919")
         self.sidebar_frame.pack(side="left", fill="y")
         self.sidebar_frame.pack_propagate(False)
         
-        # Logotipo en el sidebar
-        logo_label = ctk.CTkLabel(self.sidebar_frame, text="RUST", font=ctk.CTkFont(family="Segoe UI", size=24, weight="bold"), text_color=COLOR_RUST_RED)
-        logo_label.pack(pady=(25, 0))
-        logo_sub = ctk.CTkLabel(self.sidebar_frame, text="AUTO-QUEUE V2", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color="white")
-        logo_sub.pack(pady=(0, 30))
+        brand = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        brand.pack(fill="x", padx=18, pady=(28, 10))
+        self.brand_image = ctk.CTkImage(light_image=Image.open(get_asset_path("rust.ico")),
+                                       dark_image=Image.open(get_asset_path("rust.ico")), size=(38, 38))
+        ctk.CTkLabel(brand, text="", image=self.brand_image, width=38, height=38).pack(side="left", padx=(0, 10))
+        self.brand_title = ctk.CTkLabel(brand, text="Auto-Queue", width=0, anchor="w",
+            font=ctk.CTkFont(family="Segoe UI", size=17, weight="bold"), text_color="#f1eee7")
+        self.brand_title.pack(side="left")
+        ctk.CTkLabel(self.sidebar_frame, text="RUST COMPANION", anchor="w", font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"), text_color="#7e8981").pack(fill="x", padx=20, pady=(0, 34))
+        ctk.CTkLabel(self.sidebar_frame, text="ESPACIO DE JUEGO", anchor="w", font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"), text_color="#7e8981").pack(fill="x", padx=24, pady=(0, 4))
 
         # Contenedor de paneles (Derecha)
         self.container_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
@@ -729,12 +695,12 @@ class App(ctk.CTk):
         self.icon_settings = load_icon("settings")
 
         btn_data = [
-            ("home", self.icon_home, "INICIO"),
-            ("snipe", self.icon_snipe, "WIPE-SPAM"),
-            ("servers", self.icon_servers, "SERVIDORES"),
-            ("wake", self.icon_wake, "AUTO-DESPERTAR"),
-            ("logs", self.icon_logs, "ACTIVIDAD"),
-            ("discord", self.icon_discord, "DISCORD")
+            ("home", self.icon_home, "Inicio"),
+            ("snipe", self.icon_snipe, "Wipe en vivo"),
+            ("servers", self.icon_servers, "Servidores"),
+            ("wake", self.icon_wake, "Auto-despertar"),
+            ("logs", self.icon_logs, "Actividad"),
+            ("discord", self.icon_discord, "Comunidad")
         ]
 
         # Contenedor para alinear los botones arriba
@@ -745,7 +711,7 @@ class App(ctk.CTk):
         for idx, (page_id, icon_img, text) in enumerate(btn_data):
             # Frame wrapper para el botón y la barra roja
             wrapper = ctk.CTkFrame(self.nav_container, fg_color="transparent", height=45)
-            wrapper.grid(row=idx, column=0, sticky="ew", pady=2)
+            wrapper.grid(row=idx, column=0, sticky="ew", padx=12, pady=3)
             wrapper.pack_propagate(False)
             
             # Barra roja indicadora (oculta por defecto)
@@ -755,14 +721,14 @@ class App(ctk.CTk):
 
             btn = ctk.CTkButton(
                 wrapper,
-                text=f"   {text}",
+                text=f"  {text}",
                 image=icon_img,
                 height=45,
-                corner_radius=0,
+                corner_radius=8,
                 fg_color="transparent",
-                text_color="#aaaaaa",
-                hover_color="#1a1a1c",
-                font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+                text_color="#a6aea7",
+                hover_color="#222624",
+                font=ctk.CTkFont(family="Segoe UI", size=13),
                 anchor="w",
                 command=lambda p=page_id: self.switch_page(p)
             )
@@ -775,7 +741,7 @@ class App(ctk.CTk):
         
         # Botón de SETTINGS al final
         settings_wrapper = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent", height=45)
-        settings_wrapper.pack(side="bottom", fill="x", pady=2)
+        settings_wrapper.pack(side="bottom", fill="x", padx=12, pady=10)
         settings_wrapper.pack_propagate(False)
         
         settings_bar = ctk.CTkFrame(settings_wrapper, width=4, corner_radius=0, fg_color="transparent")
@@ -784,47 +750,47 @@ class App(ctk.CTk):
         
         settings_btn = ctk.CTkButton(
             settings_wrapper,
-            text=f"   SETTINGS",
+            text="   Ajustes",
             image=self.icon_settings,
             height=45,
-            corner_radius=0,
+            corner_radius=8,
             fg_color="transparent",
-            text_color="#aaaaaa",
-            hover_color="#1a1a1c",
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#a6aea7",
+            hover_color="#222624",
+            font=ctk.CTkFont(family="Segoe UI", size=13),
             anchor="w",
-            command=lambda: styled_showinfo(self, "Aviso", "Próximamente")
+            command=lambda: self.switch_page("settings")
         )
         settings_btn.pack(side="left", fill="x", expand=True)
         self.nav_buttons["settings"] = settings_btn
 
         # Footer in sidebar
-        lbl_version = ctk.CTkLabel(self.sidebar_frame, text=f"v{CURRENT_VERSION}", font=ctk.CTkFont(size=10), text_color="#555555", cursor="hand2")
+        lbl_version = ctk.CTkLabel(self.sidebar_frame, text=f"v{CURRENT_VERSION}", font=ctk.CTkFont(size=10), text_color="#7e8981", cursor="hand2")
         lbl_version.pack(side="bottom", pady=(0, 10))
         lbl_version.bind("<Button-1>", self._on_version_click)
         self._lbl_version = lbl_version
         
         # Panel oculto de reconexión (inicialmente invisible)
-        self._reconnect_frame = ctk.CTkFrame(self.sidebar_frame, fg_color="#1a1a2e", corner_radius=8, border_width=1, border_color="#333366")
+        self._reconnect_frame = ctk.CTkFrame(self.sidebar_frame, fg_color="#222624", corner_radius=8, border_width=1, border_color="#303632")
         self._rc_toggle_var = ctk.BooleanVar(value=self.settings.get("reconnect_enabled", False))
-        rc_title = ctk.CTkLabel(self._reconnect_frame, text="🔄 Reconexión", font=ctk.CTkFont(size=11, weight="bold"), text_color="#8888ff")
+        rc_title = ctk.CTkLabel(self._reconnect_frame, text="🔄 Reconexión", font=ctk.CTkFont(size=11, weight="bold"), text_color="#df7957")
         rc_title.pack(pady=(8, 2))
         rc_switch = ctk.CTkSwitch(self._reconnect_frame, text="Activa", variable=self._rc_toggle_var, command=self._on_reconnect_toggle,
-                                  font=ctk.CTkFont(size=10), progress_color="#5555cc", width=40, height=18)
+                                  font=ctk.CTkFont(size=10), progress_color="#df7957", width=40, height=18)
         rc_switch.pack(pady=(0, 4))
         rc_interval_frame = ctk.CTkFrame(self._reconnect_frame, fg_color="transparent")
         rc_interval_frame.pack(fill="x", padx=8, pady=(0, 4))
         ctk.CTkLabel(rc_interval_frame, text="Cada", font=ctk.CTkFont(size=9), text_color="#888").pack(side="left")
-        self._rc_interval_label = ctk.CTkLabel(rc_interval_frame, text=f"{self._reconnect_interval} min", font=ctk.CTkFont(size=9, weight="bold"), text_color="#aaaaff")
+        self._rc_interval_label = ctk.CTkLabel(rc_interval_frame, text=f"{self._reconnect_interval} min", font=ctk.CTkFont(size=9, weight="bold"), text_color="#c9cfc8")
         self._rc_interval_label.pack(side="right")
         self._rc_slider = ctk.CTkSlider(self._reconnect_frame, from_=5, to=60, number_of_steps=11, width=130, height=14,
-                                        fg_color="#222244", progress_color="#5555cc", button_color="#7777ee",
+                                        fg_color="#303632", progress_color="#df7957", button_color="#f1eee7",
                                         command=self._on_reconnect_interval_change)
         self._rc_slider.set(self._reconnect_interval)
         self._rc_slider.pack(padx=8, pady=(0, 8))
         # NO pack del frame aún - se muestra con el easter egg
         
-        lbl_author = ctk.CTkLabel(self.sidebar_frame, text="Desarrollado por faabra", font=ctk.CTkFont(size=10), text_color="#555555")
+        lbl_author = ctk.CTkLabel(self.sidebar_frame, text="Hecho por faabra · Windows", font=ctk.CTkFont(size=10), text_color="#7e8981")
         lbl_author.pack(side="bottom", pady=(0, 0))
 
         # Crear las páginas
@@ -834,6 +800,7 @@ class App(ctk.CTk):
         self.create_wake_page()
         self.create_logs_page()
         self.create_discord_page()
+        self.create_settings_page()
 
         # Inicializar Smart Bridge si corresponde
         if self.smart_wipe_ip:
@@ -858,6 +825,12 @@ class App(ctk.CTk):
                 pass
         self.bind_all("<Button-1>", un_focus)
 
+        self.protocol("WM_Eliminar_WINDOW", self._on_close)
+        self.bind("<Control-f>", self._focus_server_search)
+        if self._recovery_notices:
+            self.after(800, lambda: styled_showwarning(self, "Configuración recuperada",
+                "Se detectó un archivo de configuración dañado o se utilizó su copia .bak. "
+                "Revisa tus servidores y preferencias. Los detalles están en el registro."))
         logger.info("Aplicación iniciada v%s", CURRENT_VERSION)
 
         # Restaurar reconexión inteligente si estaba activa (pero mantener panel oculto)
@@ -877,7 +850,7 @@ class App(ctk.CTk):
                 latest_tag = data.get("tag_name", "").replace("v", "").strip()
                 
                 # Si la version de la release de github es diferente a la actual
-                if latest_tag and latest_tag != CURRENT_VERSION:
+                if is_newer_version(latest_tag, CURRENT_VERSION):
                     download_url = ""
                     # Buscamos el ejecutable en los archivos subidos de la release
                     for asset in data.get("assets", []):
@@ -898,7 +871,7 @@ class App(ctk.CTk):
         w.title("¡Actualización Disponible!")
         w.geometry("420x280")
         w.resizable(False, False)
-        w.configure(fg_color="#141416")
+        w.configure(fg_color="#171919")
         
         x = int(self.winfo_x() + (self.winfo_width() / 2) - 210)
         y = int(self.winfo_y() + (self.winfo_height() / 2) - 140)
@@ -939,7 +912,7 @@ class App(ctk.CTk):
             self.update_progress.pack(pady=10)
             threading.Thread(target=self.download_and_install_update, args=(download_url, w), daemon=True).start()
             
-        btn_accept = ctk.CTkButton(btn_frame, text="✅ Actualizar", fg_color="#28a745", hover_color="#218838", command=on_accept)
+        btn_accept = ctk.CTkButton(btn_frame, text="✅ Actualizar", fg_color="#9dbb9d", hover_color="#218838", command=on_accept)
         btn_accept.pack(side="left", padx=10)
         
         btn_cancel = ctk.CTkButton(btn_frame, text="❌ Más tarde", fg_color="#dc3545", hover_color="#c82333", command=w.destroy)
@@ -953,7 +926,7 @@ class App(ctk.CTk):
                 return
 
             req = urllib.request.Request(download_url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req) as response:
+            with urllib.request.urlopen(req, timeout=30) as response:
                 total_size = int(response.info().get("Content-Length", -1))
                 new_exe_path = os.path.join(tempfile.gettempdir(), "RustAutoQueue_new.exe")
                 
@@ -973,6 +946,11 @@ class App(ctk.CTk):
                                 last_progress = progress
                                 self.after(0, lambda p=progress: self.update_progress.set(p))
                                 
+            if downloaded == 0 or (total_size > 0 and downloaded != total_size):
+                raise ValueError("La descarga está incompleta. Vuelve a intentarlo.")
+            with open(new_exe_path, "rb") as downloaded_file:
+                if downloaded_file.read(2) != b"MZ":
+                    raise ValueError("El archivo descargado no es un ejecutable de Windows.")
             current_exe = sys.executable
             
             # Preparar un archivo batch que se encargará de sustituir la app mientras está cerrada
@@ -1015,57 +993,105 @@ del "%~f0"
 
     # --- LÓGICA DE SERVIDORES ---
     def load_servers(self):
-        if os.path.exists(CONFIG_FILE):
-            try:
-                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    for k, v in data.items():
-                        if isinstance(v, str):
-                            data[k] = {"ip": v, "fav": False}
-                        elif isinstance(v, dict) and "fav" not in v:
-                            data[k]["fav"] = False
-                    return data
-            except Exception as e:
-                logger.warning("Error cargando servidores: %s", e)
-        return {}
+        return load_json(CONFIG_FILE, validate_servers, dict, self._recovery_notices.append)
 
     def save_servers(self):
         try:
-            # Backup silencioso antes de sobreescribir
-            backup = CONFIG_FILE + ".bak"
-            if os.path.exists(CONFIG_FILE):
-                import shutil
-                shutil.copy2(CONFIG_FILE, backup)
-            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(self.servers_data, f, indent=4)
-        except Exception as e:
-            logger.error("Error guardando servidores: %s", e)
+            save_json(CONFIG_FILE, self.servers_data, validate_servers)
+            return True
+        except (OSError, ValueError) as error:
+            logger.exception("Error guardando servidores")
+            styled_showerror(self, "No se pudo guardar", f"Tus cambios no se han guardado.\n{error}")
+            return False
 
-    # --- SISTEMA DE PREFERENCIAS ---
     def load_settings(self):
-        default = {"wake_method": None, "delay": 10, "one_time_mode": False}
-        if os.path.exists(SETTINGS_FILE):
-            try:
-                with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    for k, v in default.items():
-                        if k not in data: data[k] = v
-                    return data
-            except Exception as e:
-                logger.warning("Error cargando settings: %s", e)
-        return default
+        return load_json(SETTINGS_FILE, validate_settings, lambda: validate_settings({}), self._recovery_notices.append)
 
     def save_settings(self):
         try:
-            # Backup silencioso antes de sobreescribir
-            backup = SETTINGS_FILE + ".bak"
-            if os.path.exists(SETTINGS_FILE):
-                import shutil
-                shutil.copy2(SETTINGS_FILE, backup)
-            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump(self.settings, f, indent=4)
-        except Exception as e:
-            logger.error("Error guardando settings: %s", e)
+            save_json(SETTINGS_FILE, self.settings, validate_settings)
+            return True
+        except (OSError, ValueError) as error:
+            logger.exception("Error guardando preferencias")
+            styled_showerror(self, "No se pudo guardar", f"Tus preferencias no se han guardado.\n{error}")
+            return False
+
+    def _valid_address(self, value):
+        try:
+            return normalize_address(value)
+        except ValueError as error:
+            styled_showwarning(self, "Dirección incorrecta", str(error))
+            return None
+
+    def _on_close(self):
+        if self._closing:
+            return
+        if self._delay_save_timer is not None:
+            self.after_cancel(self._delay_save_timer)
+            self._delay_save_timer = None
+            if not self.save_settings():
+                return
+        self._closing = True
+        self.is_sniping = False
+        self.snipe_run_id = None
+        self._stop_reconnect_loop()
+        self.destroy()
+        self._server_executor.shutdown(wait=False, cancel_futures=True)
+
+    def report_callback_exception(self, exc_type, value, traceback):
+        logger.error("Error de interfaz", exc_info=(exc_type, value, traceback))
+        if not self._closing:
+            styled_showerror(self, "Error inesperado", "No se pudo completar la acción. Consulta el registro para ver los detalles.")
+
+    def _focus_server_search(self, event=None):
+        self.switch_page("servers")
+        self.server_search.focus_set()
+        return "break"
+
+    def _schedule_server_filter(self, *args):
+        job = getattr(self, "_server_filter_job", None)
+        if job is not None:
+            self.after_cancel(job)
+        self._server_filter_job = self.after(300, self._apply_server_filter)
+
+    def _apply_server_filter(self):
+        self._server_filter_job = None
+        self.refresh_server_list(self.pages["servers"])
+
+    def create_settings_page(self):
+        page = ctk.CTkScrollableFrame(self.container_frame, fg_color="transparent")
+        self.pages["settings"] = page
+        ctk.CTkLabel(page, text="Ajustes", font=self.font_title, text_color=COLOR_RUST_RED).pack(anchor="w", padx=24, pady=(24, 8))
+        ctk.CTkLabel(page, text="Preferencias y herramientas de mantenimiento", font=self.font_text, text_color="#a6aea7").pack(anchor="w", padx=24, pady=(0, 20))
+        card = ctk.CTkFrame(page, fg_color="#1b1e1d", border_width=1, border_color="#303632")
+        card.pack(fill="x", padx=24, pady=8)
+        ctk.CTkLabel(card, text="Interfaz", font=self.font_subtitle).pack(anchor="w", padx=18, pady=(16, 10))
+        self.reduce_motion_var = ctk.BooleanVar(value=self.settings.get("reduce_motion", False))
+        def save_motion():
+            self.settings["reduce_motion"] = self.reduce_motion_var.get()
+            self.save_settings()
+        ctk.CTkSwitch(card, text="Reducir animaciones", variable=self.reduce_motion_var, command=save_motion,
+                      progress_color=COLOR_RUST_RED).pack(anchor="w", padx=18, pady=(0, 16))
+        reconnect = ctk.CTkFrame(page, fg_color="#1b1e1d", border_width=1, border_color="#303632")
+        reconnect.pack(fill="x", padx=24, pady=8)
+        ctk.CTkLabel(reconnect, text="Reconexión", font=self.font_subtitle).pack(anchor="w", padx=18, pady=(16, 10))
+        ctk.CTkSwitch(reconnect, text="Activar el vigilante de reconexión", variable=self._rc_toggle_var,
+                      command=self._on_reconnect_toggle, progress_color=COLOR_RUST_RED).pack(anchor="w", padx=18, pady=8)
+        ctk.CTkLabel(reconnect, text="Comprueba periódicamente si Rust está abierto y envía una conexión.\nNo confirma si ya estás dentro del servidor o en la cola.",
+                     font=self.font_text, text_color="#a6aea7", justify="left").pack(anchor="w", padx=18, pady=8)
+        self.settings_interval_label = ctk.CTkLabel(reconnect, text=f"Intervalo: {self._reconnect_interval} minutos", font=self.font_text)
+        self.settings_interval_label.pack(anchor="w", padx=18)
+        self.settings_interval_slider = ctk.CTkSlider(reconnect, from_=5, to=60, number_of_steps=11, command=self._on_reconnect_interval_change,
+                                                    progress_color=COLOR_RUST_RED)
+        self.settings_interval_slider.set(self._reconnect_interval)
+        self.settings_interval_slider.pack(fill="x", padx=18, pady=(8, 18))
+        tools = ctk.CTkFrame(page, fg_color="#1b1e1d", border_width=1, border_color="#303632")
+        tools.pack(fill="x", padx=24, pady=8)
+        ctk.CTkLabel(tools, text="Datos y diagnóstico", font=self.font_subtitle).pack(anchor="w", padx=18, pady=(16, 10))
+        ctk.CTkButton(tools, text="Abrir carpeta de datos y copias", command=lambda: os.startfile(APPDATA_DIR),
+                      fg_color="#2b2b30", hover_color="#3b3b40").pack(fill="x", padx=18, pady=6)
+        ctk.CTkButton(tools, text="Ejecutar diagnóstico del sistema", command=self.run_system_diagnostic,
+                      fg_color="#2b2b30", hover_color="#3b3b40").pack(fill="x", padx=18, pady=(6, 18))
 
     def set_wake_method(self, method, window=None):
         self.settings["wake_method"] = method
@@ -1098,15 +1124,15 @@ del "%~f0"
         
         # Añadir al tab correcto
         if method == "smart_plug":
-            ctk.CTkLabel(tab_v.tab("Enchufe Inteligente"), text=active_text, text_color="#28a745", font=ctk.CTkFont(weight="bold")).pack(pady=5)
+            ctk.CTkLabel(tab_v.tab("Enchufe Inteligente"), text=active_text, text_color="#9dbb9d", font=ctk.CTkFont(weight="bold")).pack(pady=5)
         elif method == "bios":
-            ctk.CTkLabel(tab_v.tab("BIOS RTC"), text=active_text, text_color="#28a745", font=ctk.CTkFont(weight="bold")).pack(pady=5)
+            ctk.CTkLabel(tab_v.tab("BIOS RTC"), text=active_text, text_color="#9dbb9d", font=ctk.CTkFont(weight="bold")).pack(pady=5)
         elif method == "software":
-            ctk.CTkLabel(tab_v.tab("Software (Beta)"), text=active_text, text_color="#28a745", font=ctk.CTkFont(weight="bold")).pack(pady=5)
+            ctk.CTkLabel(tab_v.tab("Software (Beta)"), text=active_text, text_color="#9dbb9d", font=ctk.CTkFont(weight="bold")).pack(pady=5)
 
     def get_current_ip_from_entry(self):
         raw_val = self.ip_entry.get().strip()
-        if not raw_val or raw_val == "Selecciona un servidor...": return ""
+        if not raw_val or raw_val == "Selecciona un servidor..." or "💡" in raw_val: return ""
         if raw_val in self.servers_data:
             data = self.servers_data[raw_val]
             return data["ip"] if isinstance(data, dict) else data
@@ -1122,14 +1148,20 @@ del "%~f0"
             return
             
         ip = self.get_current_ip_from_entry()
-        self.home_card.pack(fill="x", pady=(0, 10), after=self.ip_frame)
+        try:
+            ip = normalize_address(ip)
+        except ValueError:
+            return
+        self.home_card.pack(fill="x", padx=20, pady=(0, 12), after=self.ip_frame)
         
         self.hc_title.configure(text=raw_val if raw_val in self.servers_data else "Servidor No Guardado")
         self.hc_status.configure(text="   COMPROBANDO   ", text_color="#aaa")
         
+        self._home_query_id = getattr(self, "_home_query_id", 0) + 1
+        query_id = self._home_query_id
         # Iniciar esqueletos
-        self.hc_ping.configure(text="        ", text_color="#2b2b2f", fg_color="#2b2b2f", corner_radius=4)
-        self.hc_players.configure(text="              ", text_color="#2b2b2f", fg_color="#2b2b2f", corner_radius=4)
+        self.hc_ping.configure(text="        ", text_color="#303632", fg_color="#303632", corner_radius=4)
+        self.hc_players.configure(text="              ", text_color="#303632", fg_color="#303632", corner_radius=4)
         self._register_skeleton(self.hc_ping)
         self._register_skeleton(self.hc_players)
         
@@ -1188,7 +1220,7 @@ del "%~f0"
 
             def update_ui():
                 try:
-                    if not self.hc_status.winfo_exists(): return
+                    if self._closing or query_id != self._home_query_id or not self.hc_status.winfo_exists(): return
                     
                     self._unregister_skeleton(self.hc_ping)
                     self._unregister_skeleton(self.hc_players)
@@ -1196,13 +1228,13 @@ del "%~f0"
                     if a2s_data:
                         self.hc_players.configure(text=a2s_data["players_text"], text_color="#ccc", fg_color="transparent")
                     else:
-                        self.hc_players.configure(text="--/-- PLAYERS", text_color="#ccc", fg_color="transparent")
+                        self.hc_players.configure(text="— / — jugadores", text_color="#ccc", fg_color="transparent")
                         
                     if is_online or a2s_data:
-                        self.hc_status.configure(text=" ● ACTIVE ", text_color="#28a745")
+                        self.hc_status.configure(text=" ● Disponible ", text_color="#9dbb9d")
                         self.hc_ping.configure(text=f"Ping: {ms}ms" if ms else "Ping: <1ms", text_color="white", fg_color="transparent")
                     else:
-                        self.hc_status.configure(text=" OFFLINE ", text_color="#d9534f")
+                        self.hc_status.configure(text=" Sin respuesta ", text_color="#d9534f")
                         self.hc_ping.configure(text="Ping: FAIL", text_color="#d9534f", fg_color="transparent")
                 except Exception: pass
             self.after(0, update_ui)
@@ -1233,7 +1265,7 @@ del "%~f0"
         if result:
             ctypes.windll.kernel32.CloseHandle(token)
             ToastNotification.show(self, "Contraseña verificada", "success")
-            self.pw_entry.configure(border_color="#28a745")
+            self.pw_entry.configure(border_color="#9dbb9d")
         else:
             styled_showerror(self, "Clave Incorrecta", "La autenticación ha fallado, esa no es la contraseña.\n\nNOTA: Si ingresas en Windows usando un PIN, huella o Windows Hello, la contraseña real oculta de tu cuenta Microsoft puede ser diferente.")
             self.pw_entry.configure(border_color=COLOR_RUST_RED)
@@ -1256,6 +1288,9 @@ del "%~f0"
 
     def _register_skeleton(self, widget):
         self._active_skeletons.add(widget)
+        if self.settings.get("reduce_motion", False):
+            widget.configure(fg_color="#303632")
+            return
         if not self._skeleton_animator_running:
             self._skeleton_animator_running = True
             self._skeleton_animator_loop(0)
@@ -1266,6 +1301,9 @@ del "%~f0"
 
     def _skeleton_animator_loop(self, step):
         import math
+        if self._closing or self.settings.get("reduce_motion", False):
+            self._skeleton_animator_running = False
+            return
         # Clean up destroyed widgets
         self._active_skeletons = {w for w in self._active_skeletons if w.winfo_exists()}
         
@@ -1321,11 +1359,14 @@ del "%~f0"
 
     def _flash_activate_button(self):
         """Breve animación visual al pulsar el botón de activar."""
-        self.btn_activate.configure(fg_color="#e8a020")
-        self.after(160, lambda: self.btn_activate.configure(fg_color=COLOR_RUST_RED))
+        if not self.settings.get("reduce_motion", False):
+            self.btn_activate.configure(fg_color=COLOR_RUST_HOVER)
+            self.after(100, lambda: self.btn_activate.configure(fg_color=COLOR_RUST_RED) if not self._closing else None)
 
     def _pulse_status(self):
         """Animación de pulso suave en el indicador de estado."""
+        if self.settings.get("reduce_motion", False):
+            return
         def animate_pulse(step):
             if not hasattr(self, 'status_dot') or not self.status_dot.winfo_exists(): return
             if step <= 10:
@@ -1335,7 +1376,7 @@ del "%~f0"
                 # Encoger: de 22 a 18
                 size = 22 - int((step - 10) * 0.4)
             else:
-                self.status_dot.configure(font=ctk.CTkFont(size=18))
+                self.status_dot.configure(font=ctk.CTkFont(size=12))
                 return
                 
             self.status_dot.configure(font=ctk.CTkFont(size=size))
@@ -1511,14 +1552,14 @@ del "%~f0"
             active_ip = self.get_active_ip_from_bat()
             alias_display = active_ip
             for alias, ip in self.servers_data.items():
-                if ip == active_ip:
+                if (ip.get("ip") if isinstance(ip, dict) else ip) == active_ip:
                     alias_display = alias
                     break
-            if self.btn_activate.cget("text") != "ACTUALIZAR CONFIGURACIÓN":
-                self.btn_activate.configure(text="ACTUALIZAR CONFIGURACIÓN")
+            if self.btn_activate.cget("text") != "Actualizar configuración  →":
+                self.btn_activate.configure(text="Actualizar configuración  →")
         else:
-            if self.btn_activate.cget("text") != "ACTIVAR AUTO-COLA":
-                self.btn_activate.configure(text="ACTIVAR AUTO-COLA")
+            if self.btn_activate.cget("text") != "Activar auto-cola  →":
+                self.btn_activate.configure(text="Activar auto-cola  →")
 
         # 2. Verificar Auto-Logon
         logon_active = False
@@ -1532,22 +1573,22 @@ del "%~f0"
 
         # 3. Lógica de TEXTO de Estado + indicador visual (A1)
         if not queue_active:
-            if self.status_label.cget("text") != "INACTIVO":
-                self.status_label.configure(text="INACTIVO", text_color=COLOR_INACTIVE)
+            if self.status_label.cget("text") != "Sin activar":
+                self.status_label.configure(text="Sin activar", text_color="#f1eee7")
                 self.status_dot.configure(text_color=COLOR_INACTIVE)
-                self.status_frame.configure(fg_color="#1a1a1a")
+                self.status_frame.configure(fg_color="#1b1e1d")
         elif queue_active and not logon_active:
-            if self.status_label.cget("text") != "PENDIENTE DE CONFIGURACIÓN":
-                self.status_label.configure(text="PENDIENTE DE CONFIGURACIÓN", text_color=COLOR_YELLOW)
+            if self.status_label.cget("text") != "Revisa la configuración":
+                self.status_label.configure(text="Revisa la configuración", text_color=COLOR_YELLOW)
                 self.status_dot.configure(text_color=COLOR_YELLOW)
-                self.status_frame.configure(fg_color="#2a2510")
+                self.status_frame.configure(fg_color="#28251e")
         else:
             display = f"({alias_display})" if alias_display else ""
-            target_text = f"TODO LISTO {display}"
+            target_text = f"Auto-cola preparada {display}"
             if self.status_label.cget("text") != target_text:
                 self.status_label.configure(text=target_text, text_color=COLOR_GREEN)
                 self.status_dot.configure(text_color=COLOR_GREEN)
-                self.status_frame.configure(fg_color="#1a2a1a")
+                self.status_frame.configure(fg_color="#1b251e")
 
         # 4. Verificar Despertador (Software + Manual)
         wake_method = self.settings.get("wake_method")
@@ -1586,16 +1627,16 @@ del "%~f0"
                 self.status_wake_label.configure(text=wake_label_text, text_color=COLOR_GREEN)
         else:
             if self.status_wake_label.cget("text") != "Sin despertador configurado":
-                self.status_wake_label.configure(text="Sin despertador configurado", text_color="#555555")
+                self.status_wake_label.configure(text="Sin despertador configurado", text_color="#7e8981")
 
         # 6. Resumen en el status principal si todo está OK
         if queue_active and logon_active:
             display = f"({alias_display})" if alias_display else ""
-            target_text = f"TODO LISTO {display}"
+            target_text = f"Auto-cola preparada {display}"
             if self.status_label.cget("text") != target_text:
                 self.status_label.configure(text=target_text, text_color=COLOR_GREEN)
                 self.status_dot.configure(text_color=COLOR_GREEN)
-                self.status_frame.configure(fg_color="#1a2a1a")
+                self.status_frame.configure(fg_color="#1b251e")
 
     def _get_steam_exe(self):
         """Devuelve la ruta completa del ejecutable de Steam."""
@@ -1708,6 +1749,7 @@ del "%~f0"
 
     def _get_steam_launch_cmd(self, ip, as_list=False):
         """Devuelve el comando para lanzar Rust via steam:// URL (para ejecución directa, NO para .bat)."""
+        ip = normalize_address(ip)
         import time
         rust_args_url = f"+connect%20{ip}%20+aq%20{int(time.time())}"
         
@@ -1723,10 +1765,9 @@ del "%~f0"
         # 1. Validación de IP de Servidor
         raw_ip = self.get_current_ip_from_entry()
         ip = raw_ip
-        if ip.startswith("client.connect"):
-            ip = ip[14:].strip()
-        elif ip.startswith("connect"):
-            ip = ip[7:].strip()
+        ip = self._valid_address(ip)
+        if ip is None:
+            return
         
         if not ip:
             styled_showwarning(self, "Falta dirección", "Por favor, introduce la IP o dominio del servidor de Rust.")
@@ -1907,10 +1948,9 @@ del "%~f0"
         """Prueba la conexión al servidor usando subprocess (D3)."""
         raw_ip = self.get_current_ip_from_entry()
         ip = raw_ip
-        if ip.startswith("client.connect"):
-            ip = ip[14:].strip()
-        elif ip.startswith("connect"):
-            ip = ip[7:].strip()
+        ip = self._valid_address(ip)
+        if ip is None:
+            return
             
         if not ip: return
         if not IP_PORT_RE.match(ip):
@@ -2033,7 +2073,7 @@ del "%~f0"
         if os.path.exists(_icon_path):
             modal.after(50, lambda: modal.iconbitmap(_icon_path))
         
-        header_color = "#28a745" if all_ok else "#e09a20"
+        header_color = "#9dbb9d" if all_ok else "#e09a20"
         header_text = "✅  Todo correcto" if all_ok else "⚠️  Se encontraron advertencias"
         
         header_frame = ctk.CTkFrame(modal, fg_color=header_color, corner_radius=0, height=56)
@@ -2044,10 +2084,10 @@ del "%~f0"
         scroll = ctk.CTkScrollableFrame(modal, fg_color="transparent", scrollbar_button_color="#333", scrollbar_button_hover_color="#555")
         scroll.pack(fill="both", expand=True, padx=16, pady=12)
         
-        icon_map = {"✅": "#28a745", "⚠️": "#e09a20", "❌": "#ce422b", "➖": "#555555"}
+        icon_map = {"✅": "#9dbb9d", "⚠️": "#e09a20", "❌": "#df7957", "➖": "#7e8981"}
         
         for name, status in results:
-            row = ctk.CTkFrame(scroll, fg_color="#1a1a1c", corner_radius=8, border_width=1, border_color="#2b2b2f")
+            row = ctk.CTkFrame(scroll, fg_color="#222624", corner_radius=8, border_width=1, border_color="#303632")
             row.pack(fill="x", pady=4)
             
             # Determinar color del icono
@@ -2063,358 +2103,14 @@ del "%~f0"
             txt_frame = ctk.CTkFrame(row, fg_color="transparent")
             txt_frame.pack(side="left", fill="x", expand=True, padx=12, pady=8)
             
-            ctk.CTkLabel(txt_frame, text=name.upper(), font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color="#aaaaaa", anchor="w").pack(fill="x")
+            ctk.CTkLabel(txt_frame, text=name.upper(), font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color="#a6aea7", anchor="w").pack(fill="x")
             ctk.CTkLabel(txt_frame, text=status, font=ctk.CTkFont(family="Segoe UI", size=13), text_color="white", anchor="w", wraplength=380).pack(fill="x")
         
-        btn_close = ctk.CTkButton(modal, text="Cerrar", height=36, fg_color="#2b2b2b", hover_color="#3b3b3b", command=modal.destroy)
+        btn_close = ctk.CTkButton(modal, text="Cerrar", height=36, fg_color="#222624", hover_color="#303632", command=modal.destroy)
         btn_close.pack(fill="x", padx=16, pady=(0, 12))
 
     def create_home_page(self):
-        home_page = ctk.CTkFrame(self.container_frame, fg_color="transparent")
-        self.pages["home"] = home_page
-        
-        home_page.grid_columnconfigure(0, weight=1, uniform="col")
-        home_page.grid_columnconfigure(1, weight=1, uniform="col")
-        home_page.grid_rowconfigure(0, weight=1)
-        
-        # Column 0: Configuration
-        col0 = ctk.CTkFrame(home_page, fg_color="transparent")
-        col0.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
-        
-        lbl_title = ctk.CTkLabel(col0, text="PARÁMETROS", font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"), text_color=COLOR_RUST_RED)
-        lbl_title.pack(anchor="w", pady=(0, 15))
-        
-        # Section 1: Server Selection
-        ip_label = ctk.CTkLabel(col0, text="Seleccionar Servidor:", font=self.font_label, text_color="white")
-        ip_label.pack(anchor="w", pady=(5, 2))
-        
-        self.ip_frame = ctk.CTkFrame(col0, fg_color="transparent")
-        self.ip_frame.pack(fill="x", pady=(0, 10))
-        
-        server_aliases = list(self.servers_data.keys())
-        if not server_aliases:
-            server_aliases = ["💡 Añade un servidor (Pestaña 'Servidores')"]
-            
-        self.ip_entry = ctk.CTkOptionMenu(
-            self.ip_frame,
-            values=server_aliases,
-            height=40,
-            font=ctk.CTkFont(size=14),
-            fg_color="#101012",
-            button_color="#2b2b2b",
-            button_hover_color="#3b3b3b"
-        )
-        self.ip_entry.pack(fill="x", expand=True)
-        
-        self.ip_dropdown = CTkScrollableDropdown(self.ip_entry, values=server_aliases, command=self.on_home_server_selected,
-                              fg_color="#18181a", button_color="transparent", hover_color="#2b2b2f",
-                              frame_border_color="#333335", frame_corner_radius=8, text_color="white", alpha=1.0)
-
-        if not self.servers_data:
-            self.ip_entry.set("💡 Añade un servidor (Pestaña 'Servidores')")
-        else:
-            self.ip_entry.set("Selecciona un servidor...")
-
-        self.home_card = ctk.CTkFrame(col0, fg_color="#18181a", border_width=1, border_color="#2b2b2f", corner_radius=8)
-        
-        self.hc_title = ctk.CTkLabel(self.home_card, text="Esperando selección...", font=self.font_label, text_color="#aaaaaa", anchor="w")
-        self.hc_title.pack(fill="x", padx=10, pady=(8, 2))
-        
-        hc_stats = ctk.CTkFrame(self.home_card, fg_color="transparent")
-        hc_stats.pack(fill="x", padx=10, pady=(2, 2))
-        
-        self.hc_status = ctk.CTkLabel(hc_stats, text=" ● ", font=ctk.CTkFont(size=10, weight="bold"), text_color="#555")
-        self.hc_status.pack(side="left")
-        
-        self.hc_ping = ctk.CTkLabel(hc_stats, text="Ping: --", font=ctk.CTkFont(size=11), text_color="#888")
-        self.hc_ping.pack(side="left", padx=(5, 0))
-        
-        hc_players_frame = ctk.CTkFrame(self.home_card, fg_color="transparent")
-        hc_players_frame.pack(fill="x", padx=10, pady=(0, 8))
-        
-        self.hc_players = ctk.CTkLabel(hc_players_frame, text="--/-- PLAYERS", font=ctk.CTkFont(size=11, weight="bold"), text_color="#ccc")
-        self.hc_players.pack(side="left", padx=(5, 0))
-        
-        # Section 2: Delay Slider
-        delay_lbl = ctk.CTkLabel(col0, text="Retraso de Inicio (segundos):", font=self.font_label, text_color="white")
-        delay_lbl.pack(anchor="w", pady=(10, 2))
-        
-        delay_frame = ctk.CTkFrame(col0, fg_color="transparent")
-        delay_frame.pack(fill="x", pady=(0, 10))
-        
-        start_delay = self.settings.get("delay", 10)
-        
-        self.delay_slider = ctk.CTkSlider(
-            delay_frame,
-            from_=5,
-            to=300,
-            number_of_steps=295,
-            command=self.update_delay_label,
-            progress_color=COLOR_RUST_RED,
-            button_color=COLOR_RUST_RED,
-            button_hover_color=COLOR_RUST_HOVER
-        )
-        self.delay_slider.set(start_delay)
-        self.delay_slider.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        
-        self.delay_value_label = ctk.CTkLabel(delay_frame, text=f"{start_delay}s", font=self.font_subtitle, text_color="white", width=40)
-        self.delay_value_label.pack(side="right")
-        
-        # Section 3: Steam Switcher (combobox)
-        steam_lbl = ctk.CTkLabel(col0, text="Cuenta de Steam Activa:", font=self.font_label, text_color="white")
-        steam_lbl.pack(anchor="w", pady=(10, 2))
-        
-        self.settings_frame = ctk.CTkFrame(col0, fg_color="transparent")
-        self.settings_frame.pack(fill="x", pady=(0, 10))
-        
-        steam_choices = []
-        default_choice = None
-        
-        for user in self.steam_users:
-            display_str = f"{user['persona_name']} ({user['account_name']})"
-            steam_choices.append(display_str)
-            if user.get("most_recent") or user['account_name'] == self.settings.get("active_steam_user"):
-                default_choice = display_str
-                
-        if not steam_choices:
-            steam_choices = ["No se detectaron cuentas locales"]
-            default_choice = steam_choices[0]
-        elif not default_choice:
-            default_choice = steam_choices[0]
-            
-        self.steam_dropdown = ctk.CTkOptionMenu(
-            self.settings_frame,
-            values=steam_choices,
-            height=36,
-            font=self.font_text,
-            fg_color="#1a1a1c",
-            button_color="#1a1a1c",
-            button_hover_color="#2a2a2c"
-        )
-        self.steam_dropdown.set(default_choice)
-        self.steam_dropdown.pack(fill="x")
-        
-        CTkScrollableDropdown(self.steam_dropdown, values=steam_choices, command=self.on_steam_user_changed,
-                              fg_color="#1e1e1f", button_color="transparent", hover_color="#2b2b2d",
-                              frame_border_color="#333335", frame_corner_radius=8, text_color="white", alpha=1.0)
-        
-        # Section 4: One-time checkbox
-        self.one_time_var = tk.BooleanVar(value=self.settings.get("one_time_mode", False))
-        self.chk_one_time = ctk.CTkCheckBox(
-            col0,
-            text="Ejecutar una sola vez y desactivar",
-            variable=self.one_time_var,
-            onvalue=True,
-            offvalue=False,
-            command=self._save_one_time_setting,
-            font=self.font_text,
-            fg_color=COLOR_RUST_RED,
-            border_color="#333335",
-            hover_color="#2b2b2b"
-        )
-        self.chk_one_time.pack(anchor="w", pady=(15, 10))
-        
-        # Section 5: Smart Wipe Mode
-        smart_wipe_frame = ctk.CTkFrame(col0, fg_color="transparent")
-        smart_wipe_frame.pack(fill="x", pady=(0, 10))
-        
-        self.smart_wipe_var = tk.BooleanVar(value=self.settings.get("smart_wipe", False))
-        self.chk_smart_wipe = ctk.CTkSwitch(
-            smart_wipe_frame,
-            text="Modo Wipe Inteligente",
-            variable=self.smart_wipe_var,
-            onvalue=True,
-            offvalue=False,
-            command=self._save_smart_wipe_setting,
-            font=self.font_text,
-            button_color=COLOR_RUST_RED,
-            button_hover_color="#b3241b",
-            progress_color="#441a18"
-        )
-        self.chk_smart_wipe.pack(side="left")
-        
-        # Info box explaining how it works (Moved to right column)
-        
-        # (Info box removed to keep UI clean and avoid squishing)
-        
-        # Column 1: System Status & Activation
-        col1 = ctk.CTkFrame(home_page, fg_color="transparent")
-        col1.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
-        
-        lbl_status_title = ctk.CTkLabel(col1, text="ESTADO DEL SISTEMA", font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"), text_color=COLOR_RUST_RED)
-        lbl_status_title.pack(anchor="w", pady=(0, 15))
-        
-        self.status_frame = ctk.CTkFrame(col1, fg_color="#1a1a1a", border_width=1, border_color="#2d2d2d", corner_radius=10, height=80)
-        self.status_frame.pack(fill="x", pady=(0, 15))
-        self.status_frame.pack_propagate(False)
-        
-        status_inner = ctk.CTkFrame(self.status_frame, fg_color="transparent")
-        status_inner.pack(side="left", fill="both", expand=True, padx=15, pady=12)
-        
-        status_title_frame = ctk.CTkFrame(status_inner, fg_color="transparent")
-        status_title_frame.pack(fill="x", anchor="w")
-        
-        self.status_dot = ctk.CTkLabel(status_title_frame, text="●", font=ctk.CTkFont(size=18), text_color=COLOR_INACTIVE, width=24)
-        self.status_dot.pack(side="left", padx=(0, 8))
-        
-        self.status_label = ctk.CTkLabel(status_title_frame, text="INACTIVO", font=self.font_subtitle, text_color=COLOR_INACTIVE, anchor="w")
-        self.status_label.pack(side="left")
-        
-        self.status_wake_label = ctk.CTkLabel(status_inner, text="Sin despertador configurado", font=self.font_small, text_color="#555555", anchor="w")
-        self.status_wake_label.pack(fill="x", anchor="w", padx=(22, 0))
-        
-        # Windows username
-        user_label = ctk.CTkLabel(col1, text="Usuario de Windows (AutoLogon):", font=self.font_label, text_color="white")
-        user_label.pack(anchor="w", pady=(5, 2))
-        
-        self.user_entry = ctk.CTkEntry(
-            col1,
-            placeholder_text="Ej: diego@hotmail.com o diego",
-            height=36,
-            font=self.font_text,
-            fg_color="#1a1a1c",
-            border_color="#333335"
-        )
-        self.user_entry.pack(fill="x", pady=(0, 10))
-        self.user_entry.insert(0, self.settings.get("saved_sys_user", self.sys_user))
-        Tooltip(self.user_entry, "Si usas cuenta local, pon tu usuario. Si usas cuenta Microsoft, pon tu email completo.")
-        
-        # Windows password
-        pw_label = ctk.CTkLabel(col1, text="Contraseña de Windows (AutoLogon):", font=self.font_label, text_color="white")
-        pw_label.pack(anchor="w", pady=(5, 2))
-        
-        pw_frame = ctk.CTkFrame(col1, fg_color="transparent")
-        pw_frame.pack(fill="x", pady=(0, 10))
-        
-        self.pw_entry = ctk.CTkEntry(
-            pw_frame,
-            placeholder_text="Contraseña de Windows",
-            show="*",
-            height=36,
-            font=self.font_text,
-            fg_color="#1a1a1c",
-            border_color="#333335"
-        )
-        self.pw_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
-        Tooltip(self.pw_entry, "La contraseña del usuario de Windows para iniciar sesión de forma automática tras encender.")
-        
-        self.icon_eye = ctk.CTkImage(light_image=Image.open(get_asset_path("icons/eye.png")), size=(18, 18)) if os.path.exists(get_asset_path("icons/eye.png")) else None
-        self.icon_eye_off = ctk.CTkImage(light_image=Image.open(get_asset_path("icons/eye_off.png")), size=(18, 18)) if os.path.exists(get_asset_path("icons/eye_off.png")) else None
-        
-        def toggle_password():
-            if self.pw_entry.cget("show") == "*":
-                self.pw_entry.configure(show="")
-                btn_toggle_pw.configure(image=self.icon_eye_off)
-            else:
-                self.pw_entry.configure(show="*")
-                btn_toggle_pw.configure(image=self.icon_eye)
-                
-        btn_toggle_pw = ctk.CTkButton(
-            pw_frame,
-            text="",
-            image=self.icon_eye,
-            width=36,
-            height=36,
-            fg_color="#2b2b2b",
-            hover_color="#3b3b3b",
-            command=toggle_password
-        )
-        btn_toggle_pw.pack(side="left", padx=(0, 5))
-        
-        btn_verify_pw = ctk.CTkButton(
-            pw_frame,
-            text="Verificar",
-            width=80,
-            height=36,
-            fg_color="#2b2b2b",
-            hover_color="#3b3b3b",
-            font=self.font_label,
-            command=self.test_windows_password
-        )
-        btn_verify_pw.pack(side="right")
-        
-        # Action Buttons
-        self.btn_activate = ctk.CTkButton(
-            col1,
-            text="ACTIVAR AUTO-COLA",
-            height=48,
-            fg_color=COLOR_RUST_RED,
-            hover_color=COLOR_RUST_HOVER,
-            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
-            command=self.activate_auto_queue
-        )
-        self.btn_activate.pack(fill="x", pady=(20, 8))
-        self._add_press_effect(self.btn_activate)
-        
-        self.btn_deactivate = ctk.CTkButton(
-            col1,
-            text="DESACTIVAR Y LIMPIAR",
-            height=36,
-            fg_color="transparent",
-            border_width=1,
-            border_color="#333335",
-            hover_color="#1f1f21",
-            text_color="#aaaaaa",
-            font=self.font_label,
-            command=self.deactivate_auto_queue
-        )
-        self.btn_deactivate.pack(fill="x", pady=0)
-        self._add_press_effect(self.btn_deactivate)
-        
-        self.btn_auto_wake = ctk.CTkButton(
-            col1,
-            text="Configurar Auto-Despertar",
-            height=36,
-            fg_color="transparent",
-            border_width=1,
-            border_color=COLOR_RUST_RED,
-            hover_color="#2b1e1b",
-            text_color="white",
-            font=self.font_label,
-            command=lambda: self.switch_page("wake")
-        )
-        self.btn_auto_wake.pack(fill="x", pady=(8, 8))
-        self._add_press_effect(self.btn_auto_wake)
-        
-        btn_test = ctk.CTkButton(
-            col1,
-            text="PROBAR CONEXIÓN AHORA",
-            height=36,
-            fg_color="#1a2b3a",
-            hover_color="#203a50",
-            border_width=1,
-            border_color=COLOR_BLUE,
-            text_color=COLOR_BLUE,
-            font=self.font_label,
-            command=self.test_connection
-        )
-        btn_test.pack(fill="x", pady=0)
-        self._add_press_effect(btn_test)
-        
-        # Botón de Diagnóstico
-        btn_diag = ctk.CTkButton(
-            col1,
-            text="🔍 Diagnóstico del Sistema",
-            height=32,
-            fg_color="transparent",
-            border_width=1,
-            border_color="#333335",
-            hover_color="#1a1a1c",
-            text_color="#888888",
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            command=self.run_system_diagnostic
-        )
-        btn_diag.pack(fill="x", pady=(6, 0))
-        
-        # Info Box (Bottom Right)
-        info_card = ctk.CTkFrame(col1, fg_color="#18181b", border_width=1, border_color="#2b2b2f", corner_radius=8)
-        info_card.pack(fill="both", expand=True, pady=(20, 0))
-        
-        info_txt = ("ℹ️ ¿Cómo funciona?\n\n"
-                    "Al encender el PC, se iniciará sesión automáticamente y Steam abrirá directamente el servidor elegido.\n\n"
-                    "💡 Modo Wipe Inteligente:\n"
-                    "Espera de forma invisible al reinicio del servidor y te conecta al milisegundo exacto.")
-        ctk.CTkLabel(info_card, text=info_txt, font=self.font_small, text_color="#888888", justify="left", wraplength=260).pack(padx=12, pady=12, anchor="nw")
+        build_home(self, get_asset_path, Tooltip)
 
     def _run_snipe_thread(self, ip, lbl_status, btn_snipe, run_id=None):
         import socket, time, subprocess
@@ -2431,7 +2127,7 @@ del "%~f0"
 
         # Fase 1: Esperar a que el servidor se apague
         set_radar('waiting_offline')
-        self.after(0, lambda: is_active() and lbl_status.configure(text="Fase 1: Esperando Wipe (Servidor Online...)", text_color="#aaaaaa"))
+        self.after(0, lambda: is_active() and lbl_status.configure(text="Fase 1: Esperando Wipe (Servidor Online...)", text_color="#a6aea7"))
         
         def check_online():
             for test_port in list(dict.fromkeys([port, port + 1, port + 15, 28015])):
@@ -2474,7 +2170,7 @@ del "%~f0"
                     failed_pings = 0
                     
                 attempts += 1
-                self.after(0, lambda a=attempts: is_active() and lbl_status.configure(text=f"Fase 1: Esperando Wipe (Servidor Online...) | Intentos: {a}", text_color="#aaaaaa"))
+                self.after(0, lambda a=attempts: is_active() and lbl_status.configure(text=f"Fase 1: Esperando Wipe (Servidor Online...) | Intentos: {a}", text_color="#a6aea7"))
                 set_radar('waiting_offline', f'ping {attempts}')
                 time.sleep(3.0)
                 
@@ -2483,7 +2179,7 @@ del "%~f0"
             
         # Fase 2: El servidor está offline.
         set_radar('offline')
-        self.after(0, lambda: is_active() and lbl_status.configure(text=f"Fase 2: Wipe en proceso. Esperando A2S...", text_color="#ffcc00"))
+        self.after(0, lambda: is_active() and lbl_status.configure(text=f"Fase 2: Wipe en proceso. Esperando A2S...", text_color="#d9bc7d"))
         attempts = 0
         while is_active():
             attempts += 1
@@ -2491,7 +2187,7 @@ del "%~f0"
                 break
                 
             msg = f"Fase 2: Wipe en proceso. Esperando A2S... | Pings: {attempts}"
-            self.after(0, lambda m=msg: is_active() and lbl_status.configure(text=m, text_color="#ffcc00"))
+            self.after(0, lambda m=msg: is_active() and lbl_status.configure(text=m, text_color="#d9bc7d"))
             set_radar('offline', f'{attempts}')
             time.sleep(getattr(self, 'snipe_aggr_delay', 0.5))
             
@@ -2502,7 +2198,7 @@ del "%~f0"
         self.is_sniping = False
         set_radar('connecting')
         self.after(0, lambda: lbl_status.configure(text="¡SERVIDOR ONLINE! Conectando en 0ms...", text_color="#00ff00"))
-        self.after(0, lambda: btn_snipe.configure(text="COMENZAR SPAM", fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER))
+        self.after(0, lambda: btn_snipe.configure(text="Iniciar vigilancia", fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER))
         self.after(3000, lambda: set_radar('idle') if not self.is_sniping else None)
         
         try:
@@ -2537,10 +2233,9 @@ del "%~f0"
             else:
                 ip = s_data
                 
-        if ip.startswith("client.connect"):
-            ip = ip[14:].strip()
-        elif ip.startswith("connect"):
-            ip = ip[7:].strip()
+        ip = self._valid_address(ip)
+        if ip is None:
+            return
             
         if not ip or not IP_PORT_RE.match(ip):
             styled_showwarning(self, "Formato incorrecto", f"La dirección '{ip}' no parece válida.")
@@ -2558,8 +2253,8 @@ del "%~f0"
         if getattr(self, 'is_sniping', False):
             self.is_sniping = False
             self.snipe_run_id = None
-            lbl_status.configure(text="Spam Cancelado.", text_color="#ff5555")
-            btn_snipe.configure(text="COMENZAR SPAM", fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER)
+            lbl_status.configure(text="Vigilancia detenida", text_color="#ff5555")
+            btn_snipe.configure(text="Iniciar vigilancia", fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER)
             if hasattr(self, 'snipe_radar'): self.snipe_radar.set_state('idle')
             return
 
@@ -2573,10 +2268,9 @@ del "%~f0"
             data = self.servers_data[raw_val]
             ip = data["ip"] if isinstance(data, dict) else data
             
-        if ip.startswith("client.connect"):
-            ip = ip[14:].strip()
-        elif ip.startswith("connect"):
-            ip = ip[7:].strip()
+        ip = self._valid_address(ip)
+        if ip is None:
+            return
             
         if not ip or not IP_PORT_RE.match(ip):
             styled_showwarning(self, "Formato incorrecto", f"La dirección '{ip}' no parece válida.")
@@ -2586,248 +2280,26 @@ del "%~f0"
         self.is_sniping = True
         import time
         self.snipe_run_id = time.time()
-        lbl_status.configure(text="Iniciando motor de Spam...", text_color="#aaaaaa")
-        btn_snipe.configure(text="CANCELAR SPAM", fg_color="#ff5555", hover_color="#cc4444")
+        lbl_status.configure(text="Iniciando motor de Spam...", text_color="#a6aea7")
+        btn_snipe.configure(text="Detener vigilancia", fg_color="#ff5555", hover_color="#cc4444")
         
         import threading
         self.snipe_thread = threading.Thread(target=self._run_snipe_thread, args=(ip, lbl_status, btn_snipe, self.snipe_run_id), daemon=True)
         self.snipe_thread.start()
 
     def create_snipe_page(self):
-        snipe_page = ctk.CTkFrame(self.container_frame, fg_color="transparent")
-        self.pages["snipe"] = snipe_page
-        
-        snipe_page.grid_columnconfigure(0, weight=1)
-        snipe_page.grid_rowconfigure(2, weight=1)
-        
-        # Header
-        header = ctk.CTkFrame(snipe_page, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
-        
-        lbl_title = ctk.CTkLabel(header, text="WIPE-SPAM", font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"), text_color=COLOR_RUST_RED)
-        lbl_title.pack(side="left")
-        
-        # Info Box
-        info_card = ctk.CTkFrame(snipe_page, fg_color="#18181b", border_width=1, border_color="#2b2b2f", corner_radius=8)
-        info_card.grid(row=1, column=0, sticky="ew", padx=20, pady=(10, 20))
-        
-        info_txt = ("⚡ ¿Qué es el Wipe-Spam?\n\n"
-                    "Esta herramienta está diseñada para usarse en vivo mientras estás frente a tu PC. "
-                    "Al activarla, bombardeará el servidor con pings invisibles cada pocos milisegundos. "
-                    "En el instante exacto en que el servidor reinicie por el wipe, la app lanzará la conexión en 0ms, "
-                    "permitiéndote saltarte la cola de espera y entrar de los primeros.\n\n"
-                    "💡 Recomendación: Ten el juego abierto en el menú principal para que la conexión sea instantánea.")
-        ctk.CTkLabel(info_card, text=info_txt, font=self.font_small, text_color="#aaaaaa", justify="left", wraplength=480).pack(padx=15, pady=15, anchor="nw")
-        
-        # Main controls
-        controls_frame = ctk.CTkFrame(snipe_page, fg_color="#141416", border_width=1, border_color="#2b2b2f", corner_radius=8)
-        controls_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 20))
-        controls_frame.grid_columnconfigure(0, weight=1)
-        
-        ctk.CTkLabel(controls_frame, text="1. Selecciona tu Servidor Objetivo", font=ctk.CTkFont(size=14, weight="bold"), text_color="white").pack(pady=(30, 10))
-        
-        server_aliases = list(self.servers_data.keys())
-        if not server_aliases:
-            server_aliases = ["💡 Añade un servidor primero"]
-            
-        self.snipe_ip_entry = ctk.CTkOptionMenu(
-            controls_frame,
-            values=server_aliases,
-            height=45, width=300,
-            font=ctk.CTkFont(size=14),
-            fg_color="#101012",
-            button_color="#2b2b2b",
-            button_hover_color="#3b3b3b"
-        )
-        self.snipe_ip_entry.pack(pady=(0, 30))
-        
-        def on_snipe_server_selected(choice_str):
-            self.snipe_ip_entry.set(choice_str)
-            
-        self.snipe_dropdown = CTkScrollableDropdown(self.snipe_ip_entry, values=server_aliases, command=on_snipe_server_selected,
-                              fg_color="#18181a", button_color="transparent", hover_color="#2b2b2f",
-                              frame_border_color="#333335", frame_corner_radius=8, text_color="white", alpha=1.0)
-                              
-        if not self.servers_data:
-            self.snipe_ip_entry.set("💡 Añade un servidor primero")
-        else:
-            self.snipe_ip_entry.set("Selecciona un servidor...")
-            
-        # Status Radar — animated canvas
-        radar_outer = ctk.CTkFrame(controls_frame, fg_color="#0a0a0c", border_width=1, border_color="#1f1f22", corner_radius=8)
-        radar_outer.pack(fill="x", padx=40, pady=(10, 20))
-
-        radar_inner = tk.Frame(radar_outer, bg='#0a0a0c')
-        radar_inner.pack(pady=10)
-
-        # Radar canvas (circular animated)
-        self.snipe_radar = RadarCanvas(radar_inner, size=110)
-        self.snipe_radar.pack(side="left", padx=(15, 10))
-
-        # Status text column
-        status_col = tk.Frame(radar_inner, bg='#0a0a0c')
-        status_col.pack(side="left", fill="both", expand=True, padx=(0, 15))
-
-        lbl_phase = tk.Label(status_col, text="WIPE-SPAM RADAR",
-                             bg='#0a0a0c', fg='#333336',
-                             font=('Segoe UI', 9, 'bold'))
-        lbl_phase.pack(anchor='w', pady=(10, 2))
-
-        lbl_status = tk.Label(status_col, text="Esperando objetivo...",
-                              bg='#0a0a0c', fg='#555558',
-                              font=('Consolas', 12, 'bold'),
-                              wraplength=280, justify='left')
-        lbl_status.pack(anchor='w')
-
-        # Patch configure to work with both CTkLabel and tk.Label
-        original_configure = lbl_status.configure
-        def _patch_configure(**kw):
-            if 'text_color' in kw:
-                kw['fg'] = kw.pop('text_color')
-            original_configure(**kw)
-        lbl_status.configure = _patch_configure
-        
-        button_frame = ctk.CTkFrame(controls_frame, fg_color="transparent")
-        button_frame.pack(pady=(0, 30))
-        
-        # Slider de Agresividad
-        aggr_frame = ctk.CTkFrame(button_frame, fg_color="transparent")
-        aggr_frame.pack(fill="x", pady=(0, 12))
-
-        aggr_header = ctk.CTkFrame(aggr_frame, fg_color="transparent")
-        aggr_header.pack(fill="x")
-
-        ctk.CTkLabel(aggr_header, text="Agresividad de Escaneo",
-                     font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-                     text_color="#aaaaaa").pack(side="left")
-
-        self.lbl_aggr_value = ctk.CTkLabel(aggr_header, text="Media (0.5s)",
-                                           font=ctk.CTkFont(family="Consolas", size=11),
-                                           text_color=COLOR_RUST_RED)
-        self.lbl_aggr_value.pack(side="right")
-
-        aggr_labels = ctk.CTkFrame(aggr_frame, fg_color="transparent")
-        aggr_labels.pack(fill="x")
-        ctk.CTkLabel(aggr_labels, text="Sutil", font=ctk.CTkFont(size=10), text_color="#555558").pack(side="left")
-        ctk.CTkLabel(aggr_labels, text="Agresivo", font=ctk.CTkFont(size=10), text_color="#555558").pack(side="right")
-
-        # Valores: 0=2s, 1=1s, 2=0.5s, 3=0.2s, 4=0.05s
-        AGGR_STEPS = [2.0, 1.0, 0.5, 0.2, 0.05]
-        AGGR_LABELS = ["Sutil (2s)", "Baja (1s)", "Media (0.5s)", "Alta (0.2s)", "Máxima (50ms)"]
-
-        def on_aggr_change(val):
-            idx = int(round(float(val)))
-            self.snipe_aggr_delay = AGGR_STEPS[idx]
-            self.lbl_aggr_value.configure(text=AGGR_LABELS[idx])
-
-        self.snipe_aggr_delay = 0.5  # Default
-        self.slider_aggr = ctk.CTkSlider(
-            aggr_frame, from_=0, to=4, number_of_steps=4,
-            command=on_aggr_change,
-            fg_color="#1a1a1c", progress_color=COLOR_RUST_RED,
-            button_color="white", button_hover_color="#dddddd",
-            height=16
-        )
-        self.slider_aggr.set(2)  # Posición "Media" por defecto
-        self.slider_aggr.pack(fill="x")
-
-        actions_frame = ctk.CTkFrame(button_frame, fg_color="transparent")
-        actions_frame.pack(side="top")
-        btn_snipe = ctk.CTkButton(
-            actions_frame,
-            text="COMENZAR SPAM",
-            height=55, width=160,
-            fg_color=COLOR_RUST_RED,
-            hover_color=COLOR_RUST_HOVER,
-            font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"),
-        )
-        btn_snipe.configure(command=lambda: self._toggle_snipe(lbl_status, btn_snipe))
-        btn_snipe.pack(side="left", padx=(0, 10))
-        self._add_press_effect(btn_snipe)
-        
-        btn_test = ctk.CTkButton(
-            actions_frame,
-            text="PROBAR CONEXIÓN\n(RUST ABIERTO)",
-            height=55, width=130,
-            fg_color="#184a8c",
-            hover_color="#123768",
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            command=self._test_snipe_connection
-        )
-        btn_test.pack(side="left")
+        build_snipe(self, RadarCanvas)
 
     def create_servers_page(self):
-        servers_page = ctk.CTkFrame(self.container_frame, fg_color="transparent")
-        self.pages["servers"] = servers_page
-        
-        servers_page.grid_columnconfigure(0, weight=1)
-        servers_page.grid_rowconfigure(2, weight=1)
-        
-        # Header
-        header = ctk.CTkFrame(servers_page, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
-        
-        lbl_title = ctk.CTkLabel(header, text="MIS SERVIDORES", font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"), text_color=COLOR_RUST_RED)
-        lbl_title.pack(side="left")
-        
-        btn_refresh = ctk.CTkButton(header, text="↻ Refresh", width=70, height=28, fg_color="transparent", border_width=1, border_color="#333", hover_color="#222", font=ctk.CTkFont(size=12, weight="bold"), command=lambda: self.refresh_server_list(servers_page))
-        btn_refresh.pack(side="right")
-        
-        # Add server inline frame (form)
-        form_frame = ctk.CTkFrame(servers_page, fg_color="#18181b", border_width=1, border_color="#2b2b2f", corner_radius=8)
-        form_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=5)
-        
-        ctk.CTkLabel(form_frame, text="Añadir Servidor:", font=self.font_label, text_color="white").grid(row=0, column=0, columnspan=3, sticky="w", padx=12, pady=(8, 2))
-        
-        self.new_alias_entry = ctk.CTkEntry(form_frame, placeholder_text="Alias (Ej. Rustafied EU)", font=self.font_text, height=32, fg_color="#101012", border_color="#333")
-        self.new_alias_entry.grid(row=1, column=0, sticky="ew", padx=(12, 5), pady=(0, 12))
-        
-        self.new_ip_entry = ctk.CTkEntry(form_frame, placeholder_text="IP:Puerto o Dominio", font=self.font_text, height=32, fg_color="#101012", border_color="#333")
-        self.new_ip_entry.grid(row=1, column=1, sticky="ew", padx=5, pady=(0, 12))
-        
-        btn_add = ctk.CTkButton(form_frame, text="Añadir", font=self.font_label, fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER, height=32, command=self.add_new_server_inline)
-        btn_add.grid(row=1, column=2, sticky="e", padx=(5, 12), pady=(0, 12))
-        
-        disclaimer_lbl = ctk.CTkLabel(form_frame, text="💡 Consejo: Si la app identifica un servidor erróneo o no carga la imagen,\nasegúrate de incluir el puerto numérico al final de la IP o dominio (ej. :28024).", font=ctk.CTkFont(size=11, slant="italic"), text_color="#cccccc", justify="left")
-        disclaimer_lbl.grid(row=2, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 10))
-        
-        btn_explore = ctk.CTkButton(form_frame, text="🔍 Explorar Servidores Destacados", font=self.font_label, fg_color="#2b2b2b", hover_color="#3b3b3b", border_width=1, border_color="#444", height=32, command=self.open_featured_servers_modal)
-        btn_explore.grid(row=3, column=0, columnspan=3, sticky="ew", padx=12, pady=(0, 12))
-        
-        form_frame.grid_columnconfigure(0, weight=1)
-        form_frame.grid_columnconfigure(1, weight=1)
-        
-        # Scrollable list frame
-        self.scroll_servers = ctk.CTkScrollableFrame(servers_page, fg_color="transparent", scrollbar_button_color="#333", scrollbar_button_hover_color="#555", corner_radius=0)
-        self.scroll_servers.grid(row=2, column=0, sticky="nsew", padx=20, pady=10)
-        
-        # Footer / Import/Export Controls
-        footer = ctk.CTkFrame(servers_page, fg_color="transparent")
-        footer.grid(row=3, column=0, sticky="ew", padx=20, pady=(5, 20))
-        
-        btn_export = ctk.CTkButton(footer, text="Exportar Lista", width=120, height=32,
-                                    fg_color="#2b2b2b", hover_color="#3b3b3b", border_width=1, border_color="#444",
-                                    font=self.font_label, command=self._export_servers)
-        btn_export.pack(side="left", padx=(0, 10))
-        
-        btn_import = ctk.CTkButton(footer, text="Importar Lista", width=120, height=32,
-                                    fg_color="#2b2b2b", hover_color="#3b3b3b", border_width=1, border_color="#444",
-                                    font=self.font_label, command=lambda: self._import_servers(servers_page))
-        btn_import.pack(side="left")
-        
-        self.lbl_server_count = ctk.CTkLabel(footer, text="0 servidores", font=self.font_small, text_color="#777")
-        self.lbl_server_count.pack(side="right")
-        
-        self.refresh_server_list(servers_page)
+        build_servers(self)
 
     def add_new_server_inline(self):
         alias = self.new_alias_entry.get().strip()
         ip = self.new_ip_entry.get().strip()
         
-        if ip.startswith("client.connect"):
-            ip = ip[14:].strip()
-        elif ip.startswith("connect"):
-            ip = ip[7:].strip()
+        ip = self._valid_address(ip)
+        if ip is None:
+            return
             
         if not alias or not ip:
             styled_showwarning(self, "Campos vacíos", "Por favor, introduce tanto el alias como la dirección IP/Dominio.")
@@ -2838,8 +2310,19 @@ del "%~f0"
                 f"La dirección '{ip}' no parece válida.\nDebe ser una IP o dominio (con o sin puerto).\nEjemplos:\n- 192.168.1.100:28015\n- jugar.rustserver.com:28015")
             return
             
-        self.servers_data[alias] = {"ip": ip, "fav": False}
-        self.save_servers()
+        if alias in self.servers_data:
+            styled_showwarning(self, "Alias existente", "Ese nombre ya existe. Edita el servidor o elige otro alias.")
+            return
+        try:
+            candidate = validate_servers({**self.servers_data, alias: {"ip": ip, "fav": False}})
+        except ValueError as error:
+            styled_showwarning(self, "Servidor incorrecto", str(error))
+            return
+        previous = self.servers_data
+        self.servers_data = candidate
+        if not self.save_servers():
+            self.servers_data = previous
+            return
         
         self.new_alias_entry.delete(0, 'end')
         self.new_ip_entry.delete(0, 'end')
@@ -2874,7 +2357,7 @@ del "%~f0"
         title_lbl = ctk.CTkLabel(modal, text="🏆 SERVIDORES DESTACADOS", font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold"), text_color=COLOR_RUST_RED)
         title_lbl.pack(pady=(20, 10))
 
-        subtitle_lbl = ctk.CTkLabel(modal, text="Selección Gourmet de las mejores redes de Rust. Añádelos con un solo clic.", font=self.font_text, text_color="#aaaaaa")
+        subtitle_lbl = ctk.CTkLabel(modal, text="Selección Gourmet de las mejores redes de Rust. Añádelos con un solo clic.", font=self.font_text, text_color="#a6aea7")
         subtitle_lbl.pack(pady=(0, 20))
 
         scroll = ctk.CTkScrollableFrame(modal, fg_color="transparent")
@@ -2885,24 +2368,29 @@ del "%~f0"
                 styled_showinfo(modal, "Aviso", "¡Este servidor ya está en tu lista!")
                 return
             self.servers_data[srv_alias] = {"ip": srv_ip, "fav": False}
-            self.save_servers()
+            if not self.save_servers():
+                del self.servers_data[srv_alias]
+                return
             self.refresh_server_list(self.pages.get("servers", self))
             ToastNotification.show(modal, f"Añadido: {srv_alias}")
 
         for srv in FEATURED_SERVERS:
-            row_frame = ctk.CTkFrame(scroll, fg_color="#1a1a1c", border_width=1, border_color="#2b2b2f", corner_radius=8)
+            row_frame = ctk.CTkFrame(scroll, fg_color="#222624", border_width=1, border_color="#303632", corner_radius=8)
             row_frame.pack(fill="x", pady=5)
             
             info_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
             info_frame.pack(side="left", padx=15, pady=10, fill="x", expand=True)
             
             ctk.CTkLabel(info_frame, text=srv["alias"], font=ctk.CTkFont(size=15, weight="bold"), text_color="white", anchor="w").pack(fill="x")
-            ctk.CTkLabel(info_frame, text=srv["desc"], font=ctk.CTkFont(size=12), text_color="#aaaaaa", anchor="w").pack(fill="x")
+            ctk.CTkLabel(info_frame, text=srv["desc"], font=ctk.CTkFont(size=12), text_color="#a6aea7", anchor="w").pack(fill="x")
             
-            btn = ctk.CTkButton(row_frame, text="+ Añadir", width=80, height=30, fg_color="#28a745", hover_color="#218838", font=ctk.CTkFont(weight="bold"), command=lambda a=srv["alias"], i=srv["ip"]: add_featured(a, i))
+            btn = ctk.CTkButton(row_frame, text="+ Añadir", width=80, height=30, fg_color="#9dbb9d", hover_color="#218838", font=ctk.CTkFont(weight="bold"), command=lambda a=srv["alias"], i=srv["ip"]: add_featured(a, i))
             btn.pack(side="right", padx=15)
 
     def refresh_server_list(self, w):
+        for future in self._server_queries:
+            future.cancel()
+        self._server_queries.clear()
         # Update home dropdown if it exists
         if hasattr(self, 'ip_dropdown') and hasattr(self, 'ip_entry'):
             aliases = list(self.servers_data.keys())
@@ -2932,42 +2420,25 @@ del "%~f0"
             empty_frame = ctk.CTkFrame(self.scroll_servers, fg_color="transparent")
             empty_frame.pack(expand=True, fill="both", pady=40)
             
-            icon_lbl = ctk.CTkLabel(empty_frame, text="📭", font=ctk.CTkFont(family="Segoe UI", size=52), text_color="#444444")
+            icon_lbl = ctk.CTkLabel(empty_frame, text="＋", font=ctk.CTkFont(family="Segoe UI", size=40), text_color="#444444")
             icon_lbl.pack(pady=(30, 10))
             
-            title_lbl = ctk.CTkLabel(empty_frame, text="Sin servidores guardados", font=ctk.CTkFont(family="Segoe UI", size=17, weight="bold"), text_color="#666666")
+            title_lbl = ctk.CTkLabel(empty_frame, text="Sin servidores guardados", font=ctk.CTkFont(family="Segoe UI", size=17, weight="bold"), text_color="#c9cfc8")
             title_lbl.pack(pady=(0, 6))
             
-            empty_lbl = ctk.CTkLabel(empty_frame, text="Añade tu primer servidor usando el formulario superior\no explora los servidores destacados.", text_color="#555555", font=self.font_text, justify="center")
+            empty_lbl = ctk.CTkLabel(empty_frame, text="Añade tu primer servidor usando el formulario superior\no explora los servidores destacados.", text_color="#7e8981", font=self.font_text, justify="center")
             empty_lbl.pack()
             
             btn_featured = ctk.CTkButton(
-                empty_frame, text="🔍  Explorar Servidores Destacados",
+                empty_frame, text="Explorar servidores destacados  ↗",
                 fg_color="#1e1e21", hover_color="#2b2b30",
-                border_width=1, border_color="#333337",
-                text_color="#aaaaaa", height=38,
+                border_width=1, border_color="#303632",
+                text_color="#a6aea7", height=38,
                 font=ctk.CTkFont(family="Segoe UI", size=13),
                 command=self.open_featured_servers_modal
             )
             btn_featured.pack(pady=20)
             self._add_press_effect(btn_featured)
-            
-            # Fade-in animado
-            widgets = [icon_lbl, title_lbl, empty_lbl, btn_featured]
-            def _fade_in(step=0, total=12):
-                if step > total: return
-                alpha_pct = step / total
-                gray = int(0x44 + (0x66 - 0x44) * alpha_pct)
-                gray_hex = f"#{gray:02x}{gray:02x}{gray:02x}"
-                gray2 = int(0x44 + (0x55 - 0x44) * alpha_pct)
-                gray2_hex = f"#{gray2:02x}{gray2:02x}{gray2:02x}"
-                try:
-                    icon_lbl.configure(text_color=f"#{int(0x44 * alpha_pct):02x}{int(0x44 * alpha_pct):02x}{int(0x44 * alpha_pct):02x}" if step < 2 else gray_hex)
-                    title_lbl.configure(text_color=gray_hex)
-                    empty_lbl.configure(text_color=gray2_hex)
-                except: pass
-                self.after(30, lambda: _fade_in(step + 1, total))
-            _fade_in()
             
             if hasattr(self, 'lbl_server_count') and self.lbl_server_count.winfo_exists():
                 self.lbl_server_count.configure(text="0 servidores")
@@ -2981,18 +2452,27 @@ del "%~f0"
         # Sort servers: Favorites first
         sorted_servers = sorted(self.servers_data.items(), key=lambda x: (not (x[1].get("fav", False) if isinstance(x[1], dict) else False), x[0].lower()))
 
+        query = self.server_search_var.get().strip().casefold()
+        favorites_only = self.favorites_only_var.get()
+        sorted_servers = [(alias, data) for alias, data in sorted_servers
+                          if (not favorites_only or data.get("fav", False))
+                          and (not query or query in alias.casefold() or query in data["ip"].casefold())]
+        self.lbl_server_count.configure(text=f"{len(sorted_servers)} / {len(self.servers_data)} servidores")
+        if not sorted_servers:
+            ctk.CTkLabel(self.scroll_servers, text="No hay coincidencias.\nPrueba otro nombre o desactiva el filtro de favoritos.",
+                         text_color="#a6aea7", font=self.font_text).pack(pady=40)
         for alias, data in sorted_servers:
             ip = data["ip"] if isinstance(data, dict) else data
             is_fav = data.get("fav", False) if isinstance(data, dict) else False
             is_active = (ip == active_ip)
             
             # Main Card
-            card = ctk.CTkFrame(self.scroll_servers, fg_color="#18181A", border_width=1, border_color="#2b2b2f", corner_radius=12)
+            card = ctk.CTkFrame(self.scroll_servers, fg_color="#1b1e1d", border_width=1, border_color="#303632", corner_radius=12)
             card.pack(fill="x", pady=8, padx=10)
 
             # Glow hover effect robusto
             def _on_enter(e, c=card):
-                try: c.configure(border_color=COLOR_RUST_RED)
+                try: c.configure(border_color="#526054")
                 except: pass
                 
             def _on_leave(e, c=card):
@@ -3001,7 +2481,7 @@ del "%~f0"
                     cx, cy = c.winfo_rootx(), c.winfo_rooty()
                     cw, ch = c.winfo_width(), c.winfo_height()
                     if not (cx <= x <= cx + cw and cy <= y <= cy + ch):
-                        c.configure(border_color="#2b2b2f")
+                        c.configure(border_color="#303632")
                 except: pass
                 
             def bind_hover(widget):
@@ -3015,7 +2495,7 @@ del "%~f0"
             top_frame.pack(fill="x", padx=15, pady=(15, 10))
             
             # Avatar
-            avatar = ctk.CTkFrame(top_frame, width=50, height=50, corner_radius=10, fg_color="#101012", border_width=1, border_color="#2b2b2f")
+            avatar = ctk.CTkFrame(top_frame, width=50, height=50, corner_radius=10, fg_color="#151817", border_width=1, border_color="#303632")
             avatar.pack(side="left")
             avatar.pack_propagate(False)
             lbl_avatar = ctk.CTkLabel(avatar, text=alias[:2].upper(), font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold"), text_color=COLOR_RUST_RED)
@@ -3025,41 +2505,44 @@ del "%~f0"
             titles_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
             titles_frame.pack(side="left", padx=15, fill="x", expand=True)
             
-            lbl_alias = ctk.CTkLabel(titles_frame, text=alias.upper(), font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"), text_color="white", anchor="w")
+            lbl_alias = ctk.CTkLabel(titles_frame, text=alias, font=ctk.CTkFont(family="Segoe UI", size=17, weight="bold"), text_color="#f1eee7", anchor="w")
             lbl_alias.pack(fill="x")
             
-            lbl_subtitle = ctk.CTkLabel(titles_frame, text="                           ", font=self.font_small, text_color="#2b2b2f", fg_color="#2b2b2f", corner_radius=4, anchor="w")
+            lbl_subtitle = ctk.CTkLabel(titles_frame, text="                           ", font=self.font_small, text_color="#303632", fg_color="#303632", corner_radius=4, anchor="w")
             lbl_subtitle.pack(fill="x")
             
             self._register_skeleton(lbl_subtitle)
             
             # Favorite Star
             def toggle_fav_cmd(target_alias=alias):
+                previous = dict(self.servers_data[target_alias])
                 if isinstance(self.servers_data[target_alias], str):
                     self.servers_data[target_alias] = {"ip": self.servers_data[target_alias], "fav": True}
                 else:
                     self.servers_data[target_alias]["fav"] = not self.servers_data[target_alias].get("fav", False)
-                self.save_servers()
+                if not self.save_servers():
+                    self.servers_data[target_alias] = previous
+                    return
                 self.refresh_server_list(w)
 
             star_color = COLOR_YELLOW if is_fav else "#444444"
-            btn_fav = ctk.CTkButton(top_frame, text="★", width=40, height=40, font=ctk.CTkFont(size=24), fg_color="transparent", hover_color="#2b2b2f", text_color=star_color, command=toggle_fav_cmd)
+            btn_fav = ctk.CTkButton(top_frame, text="★", width=40, height=40, font=ctk.CTkFont(size=24), fg_color="transparent", hover_color="#303632", text_color=star_color, command=toggle_fav_cmd)
             btn_fav.pack(side="right")
             
             # --- MIDDLE SECTION (Active + Players) ---
             mid_frame = ctk.CTkFrame(card, fg_color="transparent")
             mid_frame.pack(fill="x", padx=15, pady=5)
             
-            status_badge = ctk.CTkLabel(mid_frame, text=" COMPROBANDO ", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), fg_color="#333333", text_color="#aaaaaa", corner_radius=6, height=26, width=90)
+            status_badge = ctk.CTkLabel(mid_frame, text=" COMPROBANDO ", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), fg_color="#333333", text_color="#a6aea7", corner_radius=6, height=26, width=90)
             status_badge.pack(side="left")
             
-            lbl_ping = ctk.CTkLabel(mid_frame, text="        ", font=ctk.CTkFont(size=11, weight="bold"), text_color="#2b2b2f", fg_color="#2b2b2f", corner_radius=4)
+            lbl_ping = ctk.CTkLabel(mid_frame, text="        ", font=ctk.CTkFont(size=11, weight="bold"), text_color="#303632", fg_color="#303632", corner_radius=4)
             lbl_ping.pack(side="left", padx=10)
             
-            lbl_wipe = ctk.CTkLabel(mid_frame, text="", font=ctk.CTkFont(size=11), text_color="#aaaaaa")
+            lbl_wipe = ctk.CTkLabel(mid_frame, text="", font=ctk.CTkFont(size=11), text_color="#a6aea7")
             lbl_wipe.pack(side="left", padx=(0, 10))
             
-            lbl_players = ctk.CTkLabel(mid_frame, text="              ", font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"), text_color="#2b2b2f", fg_color="#2b2b2f", corner_radius=4)
+            lbl_players = ctk.CTkLabel(mid_frame, text="              ", font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"), text_color="#303632", fg_color="#303632", corner_radius=4)
             lbl_players.pack(side="right")
 
             self._register_skeleton(lbl_ping)
@@ -3077,14 +2560,14 @@ del "%~f0"
                 else:
                     self.switch_page("home")
             
-            btn_join = ctk.CTkButton(action_frame, text="SELECCIONAR SERVIDOR" if not is_active else "SERVIDOR ACTIVO", font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"), height=40, fg_color=COLOR_RUST_RED if not is_active else "#28a745", hover_color=COLOR_RUST_HOVER if not is_active else "#218838", command=select_cmd)
+            btn_join = ctk.CTkButton(action_frame, text="Usar este servidor  →" if not is_active else "Servidor activo", font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"), height=36, fg_color="#392a24" if not is_active else "#27382b", hover_color=COLOR_RUST_HOVER if not is_active else "#218838", command=select_cmd)
             btn_join.pack(side="left", fill="x", expand=True, padx=(0, 5))
             
             def manual_smart_wipe_cmd(target_alias=alias):
                 self.snipe_ip_entry.set(target_alias)
                 self.switch_page("snipe")
 
-            btn_smart = ctk.CTkButton(action_frame, text="ESPERAR WIPE", font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"), height=40, width=110, fg_color="#184a8c", hover_color="#123768", command=manual_smart_wipe_cmd)
+            btn_smart = ctk.CTkButton(action_frame, text="Esperar wipe", font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"), height=40, width=110, fg_color="#222624", hover_color="#303632", command=manual_smart_wipe_cmd)
             btn_smart.pack(side="right")
             
             # --- BOTTOM SECTION (Copy IP, Delete, Edit, Ping) ---
@@ -3101,11 +2584,13 @@ del "%~f0"
 
             def delete_cmd(target_alias=alias, window=w):
                 if styled_askyesno(self, "Eliminar", f"¿Estás seguro de que quieres borrar el servidor '{target_alias}'?"):
-                    del self.servers_data[target_alias]
-                    self.save_servers()
+                    previous = self.servers_data.pop(target_alias)
+                    if not self.save_servers():
+                        self.servers_data[target_alias] = previous
+                        return
                     self.refresh_server_list(window)
                     
-            btn_copy = ctk.CTkButton(bottom_frame, text="COPY IP", font=ctk.CTkFont(size=11, weight="bold"), width=80, height=28, fg_color="#101012", hover_color="#2b2b2f", border_width=1, border_color="#333", command=copy_cmd)
+            btn_copy = ctk.CTkButton(bottom_frame, text="Copiar IP", font=ctk.CTkFont(size=11, weight="bold"), width=80, height=28, fg_color="#151817", hover_color="#303632", border_width=1, border_color="#333", command=copy_cmd)
             btn_copy.pack(side="left")
             
             lbl_ip = ctk.CTkLabel(bottom_frame, text=ip, font=ctk.CTkFont(size=11), text_color="#777")
@@ -3116,13 +2601,13 @@ del "%~f0"
                 host = target_ip.split(":")[0] if ":" in target_ip else target_ip
                 webbrowser.open(f"https://www.battlemetrics.com/servers/rust?q={host}")
 
-            btn_stats = ctk.CTkButton(bottom_frame, text="STATS", font=ctk.CTkFont(size=11, weight="bold"), width=60, height=28, fg_color="#101012", hover_color="#2b2b2f", border_width=1, border_color="#333", command=stats_cmd)
+            btn_stats = ctk.CTkButton(bottom_frame, text="Estadísticas", font=ctk.CTkFont(size=11, weight="bold"), width=60, height=28, fg_color="#151817", hover_color="#303632", border_width=1, border_color="#333", command=stats_cmd)
             btn_stats.pack(side="left", padx=10)
 
-            btn_del = ctk.CTkButton(bottom_frame, text="DELETE", font=ctk.CTkFont(size=11, weight="bold"), width=60, height=28, fg_color="#101012", hover_color="#3a1e1b", text_color=COLOR_RUST_RED, border_width=1, border_color="#333", command=delete_cmd)
+            btn_del = ctk.CTkButton(bottom_frame, text="Eliminar", font=ctk.CTkFont(size=11, weight="bold"), width=60, height=28, fg_color="#151817", hover_color="#3a1e1b", text_color=COLOR_RUST_RED, border_width=1, border_color="#333", command=delete_cmd)
             btn_del.pack(side="right")
             
-            btn_edit = ctk.CTkButton(bottom_frame, text="EDIT", font=ctk.CTkFont(size=11, weight="bold"), width=60, height=28, fg_color="#101012", hover_color="#2b2b2f", border_width=1, border_color="#333", command=edit_cmd)
+            btn_edit = ctk.CTkButton(bottom_frame, text="Editar", font=ctk.CTkFont(size=11, weight="bold"), width=60, height=28, fg_color="#151817", hover_color="#303632", border_width=1, border_color="#333", command=edit_cmd)
             btn_edit.pack(side="right", padx=5)
 
             # Launch async data fetcher
@@ -3242,7 +2727,7 @@ del "%~f0"
                                     # Crop to square, resize to 50x50
                                     pil_image = img.crop((left, top, right, bottom)).resize((50, 50), Image.Resampling.LANCZOS)
                                     
-                                    # Create a solid background matching the CARD fg_color (#18181A)
+                                    # Create a solid background matching the CARD fg_color (#1b1e1d)
                                     bg = Image.new('RGBA', (50, 50), (24, 24, 26, 255))
                                     
                                     # Create mask for rounded corners
@@ -3288,7 +2773,7 @@ del "%~f0"
                         # Parar esqueletos y mostrar datos
                         self._unregister_skeleton(lbl_subtitle)
                         self._unregister_skeleton(lbl_players)
-                        lbl_subtitle.configure(text=base_text, text_color="#aaaaaa", fg_color="transparent")
+                        lbl_subtitle.configure(text=base_text, text_color="#a6aea7", fg_color="transparent")
                         lbl_players.configure(text=a2s_data["players_text"], text_color="#dddddd", fg_color="transparent")
                         
                         if wipe_info:
@@ -3298,19 +2783,19 @@ del "%~f0"
                     else:
                         self._unregister_skeleton(lbl_subtitle)
                         self._unregister_skeleton(lbl_players)
-                        lbl_subtitle.configure(text="Rust Server (A2S Unreachable)", text_color="#aaaaaa", fg_color="transparent")
-                        lbl_players.configure(text="--/-- PLAYERS", text_color="#dddddd", fg_color="transparent")
+                        lbl_subtitle.configure(text="Rust Server (A2S Unreachable)", text_color="#a6aea7", fg_color="transparent")
+                        lbl_players.configure(text="— / — jugadores", text_color="#dddddd", fg_color="transparent")
                         lbl_wipe.configure(text="")
                         
                     self._unregister_skeleton(lbl_ping)
                     if a2s_data:
-                        status_badge.configure(text=" ACTIVE ● ", fg_color="#28a745", text_color="white")
+                        status_badge.configure(text=" ACTIVE ● ", fg_color="#9dbb9d", text_color="white")
                         lbl_ping.configure(text=f"Ping: {ms}ms" if ms else "Ping: <1ms", text_color="#888", fg_color="transparent")
                     elif is_online:
                         status_badge.configure(text=" HOST OK ", fg_color="#e8a020", text_color="white")
                         lbl_ping.configure(text=f"Ping: {ms}ms" if ms else "Ping: <1ms", text_color="#888", fg_color="transparent")
                     else:
-                        status_badge.configure(text=" OFFLINE ", fg_color="#d9534f", text_color="white")
+                        status_badge.configure(text=" Sin respuesta ", fg_color="#d9534f", text_color="white")
                         lbl_ping.configure(text="Ping: FAIL", text_color="#d9534f", fg_color="transparent")
                         
                     if pil_image:
@@ -3324,7 +2809,8 @@ del "%~f0"
 
             self.after(0, update_ui)
 
-        threading.Thread(target=do_fetch, daemon=True).start()
+        if not self._closing:
+            self._server_queries.append(self._server_executor.submit(do_fetch))
 
     def _edit_server_alias(self, old_alias, window):
         server_obj = self.servers_data.get(old_alias)
@@ -3340,6 +2826,18 @@ del "%~f0"
         new_ip = new_ip.strip()
         if not new_ip: return
         
+        if new_alias != old_alias and new_alias in self.servers_data:
+            styled_showwarning(self, "Alias existente", "Ya hay un servidor con ese nombre.")
+            return
+        new_ip = self._valid_address(new_ip)
+        if new_ip is None:
+            return
+        try:
+            validate_servers({new_alias: {"ip": new_ip}})
+        except ValueError as error:
+            styled_showwarning(self, "Servidor incorrecto", str(error))
+            return
+        previous = {key: dict(value) for key, value in self.servers_data.items()}
         server_obj = self.servers_data.pop(old_alias)
         if isinstance(server_obj, dict):
             server_obj["ip"] = new_ip
@@ -3347,7 +2845,13 @@ del "%~f0"
         else:
             self.servers_data[new_alias] = new_ip
             
-        self.save_servers()
+        if not self.save_servers():
+            self.servers_data = previous
+            return
+        if self.ip_entry.get() == old_alias:
+            self.ip_entry.set(new_alias)
+        if self.snipe_ip_entry.get() == old_alias:
+            self.snipe_ip_entry.set(new_alias)
         self.refresh_server_list(window)
 
     def _export_servers(self):
@@ -3380,11 +2884,12 @@ del "%~f0"
         )
         if path:
             try:
-                with open(path, "r", encoding="utf-8") as f:
-                    imported = json.load(f)
+                imported = validate_servers(read_json(path))
                 if not isinstance(imported, dict):
                     styled_showerror(self, "Error", "El archivo no tiene el formato esperado.")
                     return
+                previous = dict(self.servers_data)
+                validate_servers({**imported, **self.servers_data})
                 count_new = 0
                 for alias, ip in imported.items():
                     if alias not in self.servers_data:
@@ -3393,7 +2898,9 @@ del "%~f0"
                         else:
                             self.servers_data[alias] = ip
                         count_new += 1
-                self.save_servers()
+                if not self.save_servers():
+                    self.servers_data = previous
+                    return
                 logger.info("Servidores importados: %d nuevos de %d totales", count_new, len(imported))
                 styled_showinfo(self, "Éxito", f"Se han importado {count_new} servidor(es) nuevos.\n({len(imported) - count_new} ya existían y se omitieron.)")
                 if manager_window:
@@ -3416,7 +2923,7 @@ del "%~f0"
         title_lbl = ctk.CTkLabel(tf, text=bold_title, font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"), text_color="white", justify="left")
         title_lbl.pack(anchor="w")
         
-        desc_lbl = ctk.CTkLabel(tf, text=normal_desc, font=ctk.CTkFont(family="Segoe UI", size=13), text_color="#aaaaaa", justify="left", wraplength=400)
+        desc_lbl = ctk.CTkLabel(tf, text=normal_desc, font=ctk.CTkFont(family="Segoe UI", size=13), text_color="#a6aea7", justify="left", wraplength=400)
         desc_lbl.pack(anchor="w")
 
     def create_wake_task(self, h, m):
@@ -3512,12 +3019,12 @@ del "%~f0"
         
         # Header
         header = ctk.CTkFrame(wake_page, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 5))
+        header.grid(row=0, column=0, sticky="ew", padx=28, pady=(26, 8))
         
-        lbl_title = ctk.CTkLabel(header, text="AUTO-DESPERTAR", font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"), text_color=COLOR_RUST_RED)
+        lbl_title = ctk.CTkLabel(header, text="Auto-despertar", font=ctk.CTkFont(family="Segoe UI", size=28, weight="bold"), text_color="#f1eee7")
         lbl_title.pack(side="left")
         
-        lbl_subtitle = ctk.CTkLabel(wake_page, text="Elige cómo encender el PC automáticamente para saltarte las colas.", font=self.font_subtitle, text_color="#aaa")
+        lbl_subtitle = ctk.CTkLabel(wake_page, text="Elige cómo preparar el encendido del PC antes de tu sesión.", font=self.font_subtitle, text_color="#aaa")
         lbl_subtitle.grid(row=1, column=0, sticky="w", padx=20, pady=(0, 10))
         
         # Tabview
@@ -3529,7 +3036,7 @@ del "%~f0"
         t3 = tabview.add("Software (Beta)")
         
         # TAB 1: SMART PLUG
-        txt1 = ("Esta es la opción recomendada de Diego (faabra).\n\n"
+        txt1 = ("Para encender el equipo mediante un enchufe inteligente.\n\n"
                 "1. Compra un enchufe inteligente (Alexa, Google, etc).\n"
                 "2. En la BIOS de tu PC, busca la opción 'Restore on AC Power Loss' y ponla en 'Power On'.\n"
                 "3. Apaga el PC al 100% por la noche.\n"
@@ -3559,20 +3066,20 @@ del "%~f0"
         time_frame.pack(pady=10)
         
         ctk.CTkLabel(time_frame, text="Hora:", font=self.font_label).pack(side="left", padx=5)
-        self.combo_h = ctk.CTkOptionMenu(time_frame, values=[f"{i:02d}" for i in range(24)], width=70, fg_color="#1a1a1c", button_color="#1a1a1c", button_hover_color="#2a2a2c")
+        self.combo_h = ctk.CTkOptionMenu(time_frame, values=[f"{i:02d}" for i in range(24)], width=70, fg_color="#222624", button_color="#222624", button_hover_color="#2a2a2c")
         self.combo_h.set("09")
         self.combo_h.pack(side="left", padx=5)
         CTkScrollableDropdown(self.combo_h, values=[f"{i:02d}" for i in range(24)],
                               fg_color="#1e1e1f", button_color="transparent", hover_color="#2b2b2d",
-                              frame_border_color="#333335", frame_corner_radius=8, text_color="white", alpha=1.0)
+                              frame_border_color="#303632", frame_corner_radius=8, text_color="white", alpha=1.0)
         
         ctk.CTkLabel(time_frame, text="Min:", font=self.font_label).pack(side="left", padx=5)
-        self.combo_m = ctk.CTkOptionMenu(time_frame, values=[f"{i:02d}" for i in range(60)], width=70, fg_color="#1a1a1c", button_color="#1a1a1c", button_hover_color="#2a2a2c")
+        self.combo_m = ctk.CTkOptionMenu(time_frame, values=[f"{i:02d}" for i in range(60)], width=70, fg_color="#222624", button_color="#222624", button_hover_color="#2a2a2c")
         self.combo_m.set("30")
         self.combo_m.pack(side="left", padx=5)
         CTkScrollableDropdown(self.combo_m, values=[f"{i:02d}" for i in range(60)],
                               fg_color="#1e1e1f", button_color="transparent", hover_color="#2b2b2d",
-                              frame_border_color="#333335", frame_corner_radius=8, text_color="white", alpha=1.0)
+                              frame_border_color="#303632", frame_corner_radius=8, text_color="white", alpha=1.0)
         
         btn_prog = ctk.CTkButton(t3, text="Programar Despertador", font=self.font_label, fg_color=COLOR_RUST_RED, hover_color=COLOR_RUST_HOVER,
                                 command=lambda: self.create_wake_task(self.combo_h.get(), self.combo_m.get()))
@@ -3609,19 +3116,19 @@ del "%~f0"
         
         # Header
         header = ctk.CTkFrame(logs_page, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
+        header.grid(row=0, column=0, sticky="ew", padx=28, pady=(26, 16))
         
-        lbl_title = ctk.CTkLabel(header, text="REGISTRO DE ACTIVIDAD", font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"), text_color=COLOR_RUST_RED)
+        lbl_title = ctk.CTkLabel(header, text="Actividad", font=ctk.CTkFont(family="Segoe UI", size=28, weight="bold"), text_color="#f1eee7")
         lbl_title.pack(side="left")
         
         # Textbox for logs
         self.log_textbox = ctk.CTkTextbox(
             logs_page,
             font=ctk.CTkFont(family="Consolas", size=11),
-            fg_color="#101012",
-            border_color="#2b2b2f",
+            fg_color="#151817",
+            border_color="#303632",
             border_width=1,
-            text_color="#cccccc",
+            text_color="#c9cfc8",
             activate_scrollbars=True,
             scrollbar_button_color="#333",
             scrollbar_button_hover_color="#555",
@@ -3630,11 +3137,11 @@ del "%~f0"
         self.log_textbox.grid(row=1, column=0, sticky="nsew", padx=20, pady=5)
         
         # Configure color tags
-        self.log_textbox.tag_config("time", foreground="#555555")
+        self.log_textbox.tag_config("time", foreground="#7e8981")
         self.log_textbox.tag_config("info", foreground="#ffffff")
-        self.log_textbox.tag_config("warning", foreground="#ffcc00")
+        self.log_textbox.tag_config("warning", foreground="#d9bc7d")
         self.log_textbox.tag_config("error", foreground="#ff4444")
-        self.log_textbox.tag_config("success", foreground="#28a745")
+        self.log_textbox.tag_config("success", foreground="#9dbb9d")
         
         self.log_textbox.configure(state="disabled")
         
@@ -3647,8 +3154,8 @@ del "%~f0"
             text="Actualizar",
             width=100,
             height=32,
-            fg_color="#2b2b2b",
-            hover_color="#3b3b3b",
+            fg_color="#222624",
+            hover_color="#303632",
             font=self.font_label,
             command=self.refresh_log_viewer
         )
@@ -3659,8 +3166,8 @@ del "%~f0"
             text="Copiar Logs",
             width=100,
             height=32,
-            fg_color="#2b2b2b",
-            hover_color="#3b3b3b",
+            fg_color="#222624",
+            hover_color="#303632",
             font=self.font_label,
             command=lambda: self.clipboard_clear() or self.clipboard_append(self.log_textbox.get("1.0", "end-1c")) if hasattr(self, "log_textbox") else None
         )
@@ -3700,77 +3207,17 @@ del "%~f0"
         self.auto_refresh_logs()
         
     def create_discord_page(self):
-        discord_page = ctk.CTkFrame(self.container_frame, fg_color="transparent")
-        self.pages["discord"] = discord_page
-        
-        discord_page.grid_columnconfigure(0, weight=1)
-        discord_page.grid_rowconfigure(0, weight=1)
-        
-        # Inner Frame
-        inner = ctk.CTkFrame(discord_page, fg_color="#18191c", corner_radius=15, border_width=2, border_color="#5865F2")
-        inner.grid(row=0, column=0, padx=40, pady=40, sticky="nsew")
-        
-        inner.grid_columnconfigure(0, weight=1)
-        inner.grid_rowconfigure((0, 1, 2, 3, 4), weight=1)
-        
-        icon_lbl = ctk.CTkLabel(inner, text="\uE8F2", font=ctk.CTkFont(family="Segoe UI", size=64), text_color="#5865F2")
-        icon_lbl.grid(row=1, column=0, pady=(0, 0))
-        
-        # Efecto Hover
-        def _on_enter(e): icon_lbl.configure(text_color="#7289da")
-        def _on_leave(e): icon_lbl.configure(text_color="#5865F2")
-        icon_lbl.bind("<Enter>", _on_enter)
-        icon_lbl.bind("<Leave>", _on_leave)
-        
-        title = ctk.CTkLabel(inner, text="", font=ctk.CTkFont(size=28, weight="bold"), text_color="white")
-        title.grid(row=2, column=0, pady=(10, 0), sticky="n")
-        
-        full_text = "UNIRSE AL DISCORD"
-        def typewriter(i=0):
-            if not title.winfo_exists(): return
-            if i <= len(full_text):
-                title.configure(text=full_text[:i] + ("|" if i % 2 == 0 else ""))
-                self.after(50, lambda: typewriter(i+1))
-            else:
-                title.configure(text=full_text)
-                
-        def on_map(e):
-            if title.cget("text") != full_text:
-                title.configure(text="")
-                typewriter(0)
-                
-        inner.bind("<Map>", on_map)
-        
-        # Animación de respiración en el borde
-        def breathing_border(step=0):
-            if not inner.winfo_exists(): return
-            import math
-            factor = (math.sin(step * 0.1) + 1) / 2
-            r = int(0x2c + (0x58 - 0x2c) * factor)
-            g = int(0x33 + (0x65 - 0x33) * factor)
-            b = int(0x7a + (0xf2 - 0x7a) * factor)
-            color = f"#{r:02x}{g:02x}{b:02x}"
-            try: inner.configure(border_color=color)
-            except: pass
-            self.after(50, lambda: breathing_border(step+1))
-            
-        breathing_border(0)
-        
-        desc = ctk.CTkLabel(inner, text="Únete a la comunidad oficial.\nRecibe soporte técnico, enterate de actualizaciones\ny participa en el desarrollo de la herramienta.", font=ctk.CTkFont(size=15), text_color="#aaaaaa")
-        desc.grid(row=3, column=0, pady=0, sticky="n")
-        
+        from autoqueue_ui.design import page_heading, card, label, button
         import webbrowser
-        btn_join = ctk.CTkButton(
-            inner, 
-            text="ABRIR DISCORD", 
-            fg_color="#5865F2", 
-            hover_color="#4752C4", 
-            font=ctk.CTkFont(size=15, weight="bold"), 
-            height=45, 
-            width=200, 
-            command=lambda: webbrowser.open("https://discord.com/")
-        )
-        btn_join.grid(row=4, column=0, pady=(0, 20), sticky="n")
+        page = ctk.CTkFrame(self.container_frame, fg_color="transparent")
+        self.pages["discord"] = page
+        page_heading(page, "Comunidad", "Un espacio para seguir mejorando Auto-Queue.")
+        panel = card(page)
+        panel.pack(fill="x", padx=28, pady=12)
+        label(panel, "Construido para volver a jugar", 23, bold=True, anchor="w").pack(fill="x", padx=24, pady=(26, 10))
+        label(panel, "Consulta novedades, comparte ideas o revisa el código del proyecto.", 13, "#a6aea7", anchor="w").pack(fill="x", padx=24, pady=(0, 24))
+        button(panel, "Ver proyecto en GitHub  ↗", lambda: webbrowser.open("https://github.com/Faaabra/Auto-queue")).pack(anchor="w", padx=24, pady=(0, 24))
+
     def auto_refresh_logs(self):
         if hasattr(self, 'pages') and self.pages.get("logs") and self.pages["logs"].winfo_exists():
             try:
@@ -3841,34 +3288,8 @@ del "%~f0"
                 styled_showerror(self, "Error", f"No se pudo limpiar el archivo: {e}")
 
     def _add_press_effect(self, btn):
-        """Micro-interacción: oscurece el botón al pulsar y restaura al soltar."""
-        try:
-            orig_color = btn.cget("fg_color")
-            orig_hover = btn.cget("hover_color")
-
-            def _darken(hex_color, factor=0.7):
-                try:
-                    h = hex_color.lstrip('#')
-                    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-                    return f'#{int(r*factor):02x}{int(g*factor):02x}{int(b*factor):02x}'
-                except:
-                    return hex_color
-
-            def _on_press(e):
-                try:
-                    c = btn.cget("fg_color")
-                    if isinstance(c, (list, tuple)): c = c[0]
-                    btn.configure(fg_color=_darken(c, 0.75))
-                except: pass
-
-            def _on_release(e):
-                try: btn.configure(fg_color=orig_color, hover_color=orig_hover)
-                except: pass
-
-            btn.bind("<ButtonPress-1>", _on_press)
-            btn.bind("<ButtonRelease-1>", _on_release)
-        except Exception:
-            pass
+        """CustomTkinter handles hover/press states without resizing or stale color overrides."""
+        pass
 
     def switch_page(self, page_id):
         if self.active_page == page_id:
@@ -3877,10 +3298,10 @@ del "%~f0"
         for pid, btn in self.nav_buttons.items():
             bar = self.nav_bars.get(pid)
             if pid == page_id:
-                btn.configure(fg_color="#2b2b2b", text_color="white", hover_color="#333333")
+                btn.configure(fg_color="#392a24", text_color="#efb59f", hover_color="#493128")
                 if bar: bar.configure(fg_color=COLOR_RUST_RED)
             else:
-                btn.configure(fg_color="transparent", text_color="#aaaaaa", hover_color="#1a1a1c")
+                btn.configure(fg_color="transparent", text_color="#a6aea7", hover_color="#222624")
                 if bar: bar.configure(fg_color="transparent")
         old_page = self.pages.get(self.active_page)
         new_page = self.pages.get(page_id)
@@ -3889,9 +3310,11 @@ del "%~f0"
             return
             
         self.active_page = page_id
+        self._page_transition_id += 1
+        transition_id = self._page_transition_id
         
-        target_height = 810 if page_id == "snipe" else 740
-        if self.winfo_height() != target_height:
+        target_height = min(self.winfo_screenheight() - 80, 810 if page_id == "snipe" else 740)
+        if page_id == "snipe" and self.winfo_height() < target_height:
             w = self.winfo_width()
             if w <= 1: w = 820
             self.geometry(f"{w}x{target_height}")
@@ -3899,28 +3322,30 @@ del "%~f0"
         if page_id == "logs":
             self.refresh_log_viewer()
             
+        for other_page in self.pages.values():
+            if other_page not in (new_page, old_page):
+                other_page.place_forget()
         new_page.lift()
-        new_page.place(relx=1.0, rely=0.0, relwidth=1.0, relheight=1.0)
+        if self.settings.get("reduce_motion", False) or old_page is None:
+            new_page.place(relx=0.0, rely=0.0, relwidth=1.0, relheight=1.0)
+            if old_page and old_page != new_page:
+                old_page.place_forget()
+            return
+        new_page.place(x=14, rely=0.0, relwidth=1.0, relheight=1.0)
         
-        steps = 20
-        step_duration = 16 # approx 60 FPS
-        
-        def animate(step):
-            if not new_page.winfo_exists():
+        started = time.monotonic()
+        def animate():
+            if self._closing or transition_id != self._page_transition_id or not new_page.winfo_exists():
                 return
-            if step > steps:
-                new_page.place(relx=0.0, rely=0.0, relwidth=1.0, relheight=1.0)
-                if old_page and old_page.winfo_exists() and old_page != new_page:
-                    old_page.place_forget()
-                return
-            progress = step / steps
-            # Cubic ease out para un deslizamiento muy elegante
-            factor = 1.0 - (1.0 - progress) ** 3
-            current_x = 1.0 - factor
-            new_page.place(relx=current_x, rely=0.0, relwidth=1.0, relheight=1.0)
-            self.after(step_duration, lambda: animate(step + 1))
-            
-        animate(1)
+            progress = min(1.0, (time.monotonic() - started) / 0.16)
+            new_page.place(x=round(14 * (1 - progress) ** 3), rely=0.0, relwidth=1.0, relheight=1.0)
+            if progress < 1.0:
+                self.after(16, animate)
+            else:
+                for key, page in self.pages.items():
+                    if key != self.active_page:
+                        page.place_forget()
+        animate()
 
     # ================================================================
     #  RECONEXIÓN INTELIGENTE (Easter Egg - 7 clics en versión)
@@ -3947,11 +3372,11 @@ del "%~f0"
         if self._reconnect_panel_visible:
             self._reconnect_frame.pack_forget()
             self._reconnect_panel_visible = False
-            self._lbl_version.configure(text_color="#555555")
+            self._lbl_version.configure(text_color="#7e8981")
         else:
             self._reconnect_frame.pack(side="bottom", fill="x", padx=8, pady=(0, 5), before=self._lbl_version)
             self._reconnect_panel_visible = True
-            self._lbl_version.configure(text_color="#8888ff")
+            self._lbl_version.configure(text_color="#df7957")
             ToastNotification.show(self, "🔓 Modo Reconexión desbloqueado", "success")
 
     def _on_reconnect_toggle(self):
@@ -3972,6 +3397,10 @@ del "%~f0"
         interval = int(round(value))
         self._reconnect_interval = interval
         self._rc_interval_label.configure(text=f"{interval} min")
+        self._rc_slider.set(interval)
+        if hasattr(self, "settings_interval_label"):
+            self.settings_interval_label.configure(text=f"Intervalo: {interval} minutos")
+            self.settings_interval_slider.set(interval)
         self.settings["reconnect_interval"] = interval
         self.save_settings()
         
@@ -4001,7 +3430,7 @@ del "%~f0"
 
             lbl_title = ctk.CTkLabel(self._reconnect_toplevel, text="🛡️ Vigilando conexión de Rust...", font=ctk.CTkFont(size=14, weight="bold"), text_color="#a8a8ff")
             lbl_title.pack(pady=(15, 5))
-            lbl_desc = ctk.CTkLabel(self._reconnect_toplevel, text="Si cierras esta ventana o el programa principal,\nla reconexión inteligente dejará de funcionar.", font=ctk.CTkFont(size=11), text_color="#aaaaaa")
+            lbl_desc = ctk.CTkLabel(self._reconnect_toplevel, text="Si cierras esta ventana o el programa principal,\nla reconexión inteligente dejará de funcionar.", font=ctk.CTkFont(size=11), text_color="#a6aea7")
             lbl_desc.pack()
             
             # Si cierran la ventanita, desactivamos la reconexión
@@ -4009,7 +3438,7 @@ del "%~f0"
                 self._rc_toggle_var.set(False)
                 self._on_reconnect_toggle()
             
-            self._reconnect_toplevel.protocol("WM_DELETE_WINDOW", on_close)
+            self._reconnect_toplevel.protocol("WM_Eliminar_WINDOW", on_close)
         
         self._reconnect_tick()
 
@@ -4035,13 +3464,14 @@ del "%~f0"
             return
         
         import threading
-        threading.Thread(target=self._do_reconnect_check, daemon=True).start()
+        ip = self.get_current_ip_from_entry() or self.get_active_ip_from_bat()
+        threading.Thread(target=self._do_reconnect_check, args=(ip,), daemon=True).start()
         
         # Programar siguiente tick
         interval_ms = self._reconnect_interval * 60 * 1000
         self._reconnect_job = self.after(interval_ms, self._reconnect_tick)
 
-    def _do_reconnect_check(self):
+    def _do_reconnect_check(self, ip):
         """Comprueba si Rust esta corriendo y manda reconexion.
 
         Rust ignora steam://run/+connect si ya estas en cola o dentro del servidor.
@@ -4049,19 +3479,6 @@ del "%~f0"
         Comportamiento confirmado por tests reales.
         """
         import subprocess
-
-        # Obtener la IP del servidor configurado
-        ip = ""
-        try:
-            ip = self.get_current_ip_from_entry()
-        except Exception:
-            pass
-
-        if not ip:
-            try:
-                ip = self.get_active_ip_from_bat()
-            except Exception:
-                pass
 
         if not ip:
             logger.info("Reconnect: No hay IP configurada, saltando")
@@ -4085,7 +3502,8 @@ del "%~f0"
         # Si estas en cola o servidor -> Rust LO IGNORA (sin efecto)
         # Si te kickearon al menu -> Rust RECONECTA al servidor
         logger.info("Reconnect: Rust abierto, mandando +connect a %s", ip)
-        self.after(0, lambda: self._reconnect_via_steam(ip))
+        if self._reconnect_active and not self._closing:
+            self.after(0, lambda: self._reconnect_via_steam(ip) if self._reconnect_active else None)
 
     def _reconnect_via_steam(self, ip):
         """Reconecta lanzando steam://run/+connect IP."""

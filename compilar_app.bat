@@ -1,22 +1,22 @@
 @echo off
-color 0A
-echo =======================================================
-echo         GENERANDO RUST AUTO-QUEUE LAUNCHER V2
-echo =======================================================
-echo Por favor, espera. PyInstaller esta convirtiendo el codigo a .exe...
-echo Esto puede tomar entre 1 y 2 minutos. No cierres esta ventana.
-echo Cerrando versiones anteriores para evitar bloqueos...
-taskkill /F /IM "RustAutoQueue.exe" /T >nul 2>&1
-taskkill /F /IM "main.exe" /T >nul 2>&1
-echo.
-
-py -m PyInstaller --noconsole --uac-admin --onefile --name="RustAutoQueue" --icon="rust.ico" --add-data="rust.ico;." --add-data="icons;icons" --add-data="assets;assets" --distpath="releases" --clean main.py
-
-echo.
-echo =======================================================
-echo               ¡COMPILACION TERMINADA!
-echo.
-echo Revisa la carpeta "releases"
-echo Ahi dentro encontraras tu nuevo "RustAutoQueue.exe" puro.
-echo =======================================================
+setlocal
+cd /d "%~dp0"
+echo Preparando el entorno de compilacion de Rust Auto-Queue...
+if not exist ".venv\Scripts\python.exe" (
+    py -3 -m venv .venv
+    if errorlevel 1 goto :failed
+)
+".venv\Scripts\python.exe" -m pip install -r requirements-dev.txt
+if errorlevel 1 goto :failed
+".venv\Scripts\python.exe" -m unittest discover -s tests -v
+if errorlevel 1 goto :failed
+".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --distpath releases RustAutoQueue.spec
+if errorlevel 1 goto :failed
+echo Compilacion correcta: releases\RustAutoQueue.exe
 pause
+exit /b 0
+:failed
+echo ERROR: la compilacion no se ha completado. Revisa el mensaje anterior.
+echo Necesitas Python 3.12 o posterior instalado. Cierra la app si el ejecutable esta bloqueado.
+pause
+exit /b 1
